@@ -1,0 +1,11 @@
+{
+  "name": "fake-news-detector",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev:web": "pnpm --filter @fake-news/web dev",
+    "dev:api": "pnpm --filter @fake-news/api dev",
+    "build": "pnpm -r build"
+  }
+}

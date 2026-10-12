@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.pnpm-store/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+ml/data/
+ml/artifacts/
+apps/ai-service/requirements.lock
