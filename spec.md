@@ -10,7 +10,7 @@ Web app: user submits text or URL, gets a **credibility score** with per-claim e
 ## Architecture
 ```
 web (React) --REST/SSE--> api (Node.js) --HTTP--> ai-service (Python FastAPI)
-                           |-- PostgreSQL (+pgvector)      |-- LLM provider
+                           |-- MySQL                        |-- LLM provider
                            '-- Redis (cache, BullMQ)       |-- embeddings
                                                            '-- TF-IDF classifier
 ```
@@ -28,14 +28,14 @@ packages/shared   shared TS types/schemas
 docs/spec.md
 docker-compose.yml
 ```
-Python deps managed separately (pyproject.toml). Deploy per app: Vercel (web), Render/Railway/Fly.io (api, ai-service), Supabase (DB).
+Python deps managed separately (pyproject.toml). Deploy per app: Vercel (web), Render/Railway/Fly.io (api, ai-service), and a managed MySQL provider such as Railway or Aiven.
 
 ## Environment setup (agent runbook)
 
 Run from repo root. Idempotent: skip steps already done. Stop and report on any failure; never invent secrets.
 
 ### Prerequisites (verify, do not install silently)
-`python --version` (3.11 or 3.12), `node --version` (>=20), `pnpm --version`, `git --version`. Docker optional (Postgres/Redis).
+`python --version` (3.11 or 3.12), `node --version` (>=20), `pnpm --version`, `git --version`. Docker optional (MySQL/Redis).
 
 ### 1. Python env (ai-service + ml)
 ```bash
@@ -101,7 +101,7 @@ TAVILY_API_KEY=
 SEARXNG_URL=
 # API
 PORT=3000
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/fakenews
+DATABASE_URL=mysql://mysql:mysql@localhost:3306/fakenews
 REDIS_URL=redis://localhost:6379
 RATE_LIMIT_PER_MIN=10
 ```
@@ -109,7 +109,7 @@ Config is read via pydantic-settings (ai-service) and dotenv (api). After copyin
 
 ### 4. Services (optional)
 ```bash
-docker compose up -d postgres redis
+docker compose up -d mysql redis
 ```
 
 ### 5. Verify
@@ -125,6 +125,7 @@ pnpm --filter web dev                 # web starts without errors
 - Add `.venv/`, `.env`, `ml/data/`, `ml/artifacts/` to `.gitignore`.
 - Do not download datasets or models without telling the user; report sizes first.
 - Log each command and its result in a short summary at the end.
+- Maintain the repository-root `log.md` across sessions. Append each session's date, goal, commands and results, files changed, and blockers/resolutions. Never record secret values.
 
 ## Stack
 | Layer | Choice |

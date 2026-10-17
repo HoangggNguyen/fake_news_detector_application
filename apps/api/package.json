@@ -6,22 +6,26 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/analyzer.test.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "bullmq": "^5.56.5",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
+    "express-rate-limit": "^8.0.1",
     "express": "^5.1.0",
     "ioredis": "^5.6.1",
-    "pg": "^8.16.3",
+    "jsdom": "^26.1.0",
+    "mysql2": "^3.14.3",
     "zod": "^4.0.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.16.5",
-    "@types/pg": "^8.15.5",
     "tsx": "^4.20.3",
     "typescript": "~5.8.3"
   }
