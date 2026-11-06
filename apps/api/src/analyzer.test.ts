@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { aggregateCredibility, restrictCitations } from './analyzer.js'
 import { isPrivateAddress } from './article.js'
+import { analysisSchema } from './validation.js'
+import { fetchClassifierSignal } from './classifier.js'
 
 test('unverifiable claims do not create a false or true score', () => {
   assert.deepEqual(aggregateCredibility([{ verdict: 'unverifiable', confidence: 0 }]), {
@@ -39,4 +41,42 @@ test('citations are limited to retrieved URLs and retain their stance', () => {
     { url: 'https://fabricated.example/source', stance: 'supports' },
     { url: 'not a URL', stance: 'context' },
   ]), [{ ...evidence[0], stance: 'refutes' }])
+})
+
+test('analysis requests accept public HTTP URLs and reject malformed or credentialed URLs', () => {
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'https://example.com/article' }).success, true)
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'file:///etc/passwd' }).success, false)
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'not a valid url at all' }).success, false)
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'https://user:pass@example.com/story' }).success, false)
+})
+
+test('classifier service failures are non-fatal and valid signals are schema-checked', async () => {
+  const unavailable = await fetchClassifierSignal(
+    'test input that is long enough',
+    'http://classifier.test',
+    async () => new Response('', { status: 503 }),
+  )
+  assert.equal(unavailable, null)
+
+  const failedConnection = await fetchClassifierSignal(
+    'test input that is long enough',
+    'http://classifier.test',
+    async () => { throw new Error('offline') },
+  )
+  assert.equal(failedConnection, null)
+
+  const signal = await fetchClassifierSignal(
+    'test input that is long enough',
+    'http://classifier.test',
+    async () => Response.json({
+      label: 'fake',
+      confidence: 0.8,
+      probabilities: { real: 0.2, fake: 0.8 },
+      model_name: 'fixture',
+      model_version: 'test',
+      top_features: [],
+    }),
+  )
+  assert.equal(signal?.label, 'fake')
+  assert.equal(signal?.probabilities.fake, 0.8)
 })

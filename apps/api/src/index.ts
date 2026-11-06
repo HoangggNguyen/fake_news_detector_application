@@ -9,16 +9,14 @@ import type { RowDataPacket } from 'mysql2'
 import { pool } from './db.js'
 import { extractArticle } from './article.js'
 import { analyzeContent } from './analyzer.js'
+import { analysisSchema } from './validation.js'
+import { classifierSignalSchema, fetchClassifierSignal } from './classifier.js'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3000)
 const progressEvents = new EventEmitter()
 progressEvents.setMaxListeners(100)
-
-const analysisSchema = z.object({
-  type: z.enum(['text', 'url']),
-  content: z.string().trim().min(10).max(100_000),
-})
+const aiServiceUrl = process.env.AI_SERVICE_URL ?? 'http://localhost:8000'
 
 const aiResultSchema = z.object({
   overall: z.object({
@@ -39,6 +37,7 @@ const aiResultSchema = z.object({
     })),
   })),
   source_assessment: z.object({ domain: z.string().nullable(), reputation: z.string() }),
+  classifier_signal: classifierSignalSchema.nullable().optional(),
   disclaimer: z.string(),
 })
 
@@ -88,7 +87,11 @@ async function processAnalysis(analysisId: string) {
     }
 
     sendProgress(analysisId, 'evidence', 'Đang tìm bằng chứng và đối chiếu tuyên bố', 35)
-    const result = aiResultSchema.parse(await analyzeContent(content, sourceUrl))
+    const [analysisResult, styleSignal] = await Promise.all([
+      analyzeContent(content, sourceUrl),
+      fetchClassifierSignal(content, aiServiceUrl),
+    ])
+    const result = aiResultSchema.parse({ ...analysisResult, classifier_signal: styleSignal })
     sendProgress(analysisId, 'save', 'Đang lưu kết quả', 85)
 
     const connection = await pool.getConnection()
@@ -109,6 +112,25 @@ async function processAnalysis(analysisId: string) {
             'INSERT INTO evidence (id, claim_id, title, url, snippet, stance, source_domain) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [randomUUID(), claimId, evidence.title, evidence.url, evidence.snippet, evidence.stance, new URL(evidence.url).hostname],
           )
+        }
+      }
+      if (result.classifier_signal) {
+        try {
+          await connection.execute(
+            'INSERT INTO classifier_signals (analysis_id, label, confidence, real_probability, fake_probability, model_name, model_version, top_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+              analysisId,
+              result.classifier_signal.label,
+              result.classifier_signal.confidence,
+              result.classifier_signal.probabilities.real,
+              result.classifier_signal.probabilities.fake,
+              result.classifier_signal.model_name,
+              result.classifier_signal.model_version,
+              JSON.stringify(result.classifier_signal.top_features),
+            ],
+          )
+        } catch (error) {
+          console.warn('Classifier signal was not persisted:', error instanceof Error ? error.message : error)
         }
       }
       await connection.commit()
@@ -173,6 +195,27 @@ async function getAnalysis(analysisId: string, sessionId: string) {
     )
     return { ...claim, evidence: evidenceRows }
   }))
+  let styleSignal = null
+  try {
+    const [signalRows] = await pool.execute<RowDataPacket[]>(
+      'SELECT label, confidence, real_probability, fake_probability, model_name, model_version, top_features FROM classifier_signals WHERE analysis_id = ?',
+      [analysisId],
+    )
+    if (signalRows[0]) {
+      styleSignal = {
+        label: signalRows[0].label,
+        confidence: signalRows[0].confidence,
+        probabilities: { real: signalRows[0].real_probability, fake: signalRows[0].fake_probability },
+        model_name: signalRows[0].model_name,
+        model_version: signalRows[0].model_version,
+        top_features: typeof signalRows[0].top_features === 'string'
+          ? JSON.parse(signalRows[0].top_features)
+          : signalRows[0].top_features,
+      }
+    }
+  } catch {
+    // Older databases may not yet have the optional classifier table.
+  }
   return {
     id: analysis.id,
     status: analysis.status,
@@ -185,6 +228,7 @@ async function getAnalysis(analysisId: string, sessionId: string) {
     input_type: analysis.input_type,
     created_at: analysis.created_at,
     claims,
+    classifier_signal: styleSignal,
     source_assessment: { domain: analysis.url ? new URL(String(analysis.url)).hostname : null, reputation: 'unknown' },
     disclaimer: 'AI-generated, may be wrong. Verify independently.',
   }

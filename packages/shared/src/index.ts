@@ -28,6 +28,21 @@ export interface ClaimResult {
   evidence: Evidence[]
 }
 
+export interface ClassifierSignal {
+  label: 'real' | 'fake'
+  confidence: number
+  probabilities: {
+    real: number
+    fake: number
+  }
+  model_name: string
+  model_version: string
+  top_features: Array<{
+    feature: string
+    direction: 'real' | 'fake'
+  }>
+}
+
 export interface AnalysisResult {
   id: string
   status: AnalysisStatus
@@ -41,5 +56,6 @@ export interface AnalysisResult {
     domain: string | null
     reputation: string
   }
+  classifier_signal?: ClassifierSignal | null
   disclaimer: string
 }

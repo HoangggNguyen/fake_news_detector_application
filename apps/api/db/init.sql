@@ -24,6 +24,19 @@ CREATE TABLE IF NOT EXISTS claims (
   CONSTRAINT claims_analysis_fk FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS classifier_signals (
+  analysis_id CHAR(36) PRIMARY KEY,
+  label ENUM('real', 'fake') NOT NULL,
+  confidence FLOAT NOT NULL,
+  real_probability FLOAT NOT NULL,
+  fake_probability FLOAT NOT NULL,
+  model_name VARCHAR(100) NOT NULL,
+  model_version VARCHAR(40) NOT NULL,
+  top_features JSON NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT classifier_signals_analysis_fk FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS evidence (
   id CHAR(36) PRIMARY KEY,
   claim_id CHAR(36) NOT NULL,

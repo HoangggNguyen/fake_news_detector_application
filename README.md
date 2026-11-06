@@ -8,7 +8,7 @@
 - API: Node.js, Express, MySQL; Redis/BullMQ là tùy chọn.
 - LLM: Gemini, Groq hoặc Ollama, cấu hình qua API.
 - Nguồn bằng chứng: Google Fact Check, Tavily; Wikipedia tiếng Việt là phương án dự phòng không cần API key.
-- Python FastAPI và model TF-IDF chưa tham gia luồng phân tích hiện tại.
+- FastAPI phục vụ classifier TF-IDF tùy chọn. Tín hiệu classifier được hiển thị riêng, không thay kết luận dựa trên bằng chứng.
 
 ## Yêu cầu
 
@@ -16,7 +16,7 @@
 - pnpm 10 trở lên.
 - MySQL 8 trở lên, cài sẵn hoặc chạy bằng Docker Desktop.
 - Redis chỉ cần khi bật BullMQ (`USE_BULLMQ=true`).
-- Git để lấy mã nguồn. Python không bắt buộc cho web/API hiện tại.
+- Git để lấy mã nguồn. Python 3.11/3.12 chỉ cần khi huấn luyện/chạy AI service; web/API có thể chạy độc lập.
 
 ## Khởi động lần đầu
 
@@ -116,6 +116,40 @@ pnpm --filter @fake-news/api test
 - `GEMINI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`: tên model được gửi tới provider tương ứng.
 - `PORT`: cổng API, mặc định `3000`.
 
+## Huấn luyện classifier (tùy chọn)
+
+Thư mục `apps/ai-service/vfnd_dataset_1000` do người dùng cung cấp; README gọi đây là VFND-Mini nhưng nguồn và quy trình gán nhãn chưa được xác minh độc lập. Nếu dùng bộ VFND chính thức từ tác giả, cần tuân theo yêu cầu liên hệ/ghi nguồn. Không dùng văn bản do LLM sinh làm nhãn chuẩn.
+
+Kiểm tra split cho thấy 1.000 dòng chỉ có 80 nội dung duy nhất sau chuẩn hóa; 620 dòng trùng trong train, và mọi nội dung val/test đều đã xuất hiện trong train. Train unique có 60 nhãn thật/20 giả. Vì vậy không dùng val/test này làm external benchmark và không diễn giải 100% holdout/CV như độ chính xác trên tin mới. Raw data và zip đã được git-ignore.
+
+CSV cần có cột `text`, `label` (`0=real`, `1=fake`) và có thể có `title` (được ghép với nội dung); cột domain nếu có sẽ bị bỏ qua. Tạo môi trường Python và cài dependencies:
+
+Tiến độ và điều kiện chấp nhận được theo dõi trong [ml/WBS.md](ml/WBS.md).
+
+```powershell
+cd apps/ai-service
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt -r ..\..\ml\requirements.txt
+```
+
+Từ `apps/ai-service`, chạy huấn luyện và đánh giá:
+
+```powershell
+python -m app.train --input vfnd_dataset_1000\train.csv --output-dir ..\..\ml\artifacts
+```
+
+Đầu ra gồm cleaned CSV, EDA chart/JSON, bảng so sánh 4 mô hình, holdout metrics và `classifier.joblib` trong `ml/artifacts/` (đã gitignore). Chỉ thêm `--external` với tập độc lập, có quyền dùng và không trùng train; split val/test hiện có không đáp ứng điều kiện này. Mốc 85% là mục tiêu, không phải bảo đảm.
+
+Chạy AI service từ `apps/ai-service`:
+
+```powershell
+.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+```
+
+`GET /health` vẫn hoạt động khi chưa có model; `POST /predict` trả `503` cho đến khi có artifact. API chính sẽ bỏ qua classifier nếu service/model chưa sẵn sàng và vẫn tiếp tục phân tích Groq.
+
 ## Endpoint chính
 
 | Phương thức | Đường dẫn | Chức năng |
@@ -126,6 +160,16 @@ pnpm --filter @fake-news/api test
 | `GET` | `/api/analyses/:id/stream` | Theo dõi tiến độ qua SSE |
 | `GET` | `/api/analyses` | Lịch sử theo browser session |
 | `POST` | `/api/analyses/:id/feedback` | Gửi đánh giá kết quả |
+
+AI service (chỉ có tín hiệu classifier khi đã train và nạp model):
+
+| Phương thức | Đường dẫn | Chức năng |
+|---|---|---|
+| `GET` | `/health` | Trạng thái FastAPI và classifier |
+| `GET` | `/model/status` | Phiên bản model đang nạp |
+| `POST` | `/predict` | Nhãn, xác suất và feature giải thích nếu model hỗ trợ |
+
+Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/predict` trả `503`; API chính bỏ qua tín hiệu này, không đổi điểm credibility, và tiếp tục luồng phân tích Groq.
 
 ## Xử lý lỗi thường gặp
 

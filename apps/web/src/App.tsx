@@ -221,6 +221,21 @@ export default function App() {
           </div>
           <p className="result-label">{resultLabels[result.overall.label] ?? result.overall.label}</p>
           <p className="result-summary">{result.overall.summary}</p>
+          {result.classifier_signal && <section className="style-signal" aria-label="Tín hiệu phụ từ mô hình phân loại">
+            <div className="style-signal-copy">
+              <p className="message-kicker">TÍN HIỆU PHỤ · CLASSIFIER</p>
+              <strong>Model nghiêng về {result.classifier_signal.label === 'fake' ? 'tin giả' : 'tin thật'}</strong>
+              <span>Độ tin cậy {Math.round(result.classifier_signal.confidence * 100)}% · {result.classifier_signal.model_name}</span>
+            </div>
+            <div className="style-probabilities">
+              <span>Thật <b>{Math.round(result.classifier_signal.probabilities.real * 100)}%</b></span>
+              <span>Giả <b>{Math.round(result.classifier_signal.probabilities.fake * 100)}%</b></span>
+            </div>
+            {result.classifier_signal.top_features.length > 0 && <p className="style-top-features">
+              Feature trọng số cao: {result.classifier_signal.top_features.map((feature) => `${feature.feature} → ${feature.direction === 'fake' ? 'nghiêng giả' : 'nghiêng thật'}`).join(' · ')}
+            </p>}
+            <p className="style-signal-note">Đây chỉ là tín hiệu của classifier, không thay thế kết luận dựa trên bằng chứng.</p>
+          </section>}
           {result.source_assessment.domain && <p className="source-assessment">Nguồn bài viết: <strong>{result.source_assessment.domain}</strong> · Uy tín: {result.source_assessment.reputation}</p>}
           <div className="claims-list">
             {result.claims.map((claim, index) => <article className="claim-item" key={`${claim.text}-${index}`}>

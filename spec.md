@@ -22,8 +22,8 @@ web (React) --REST/SSE--> api (Node.js) --HTTP--> ai-service (Python FastAPI)
 ```
 apps/web          React + Vite + TypeScript + TanStack Query + Tailwind
 apps/api          Node.js (Express or NestJS) + BullMQ
-apps/ai-service   FastAPI, loads trained model via joblib
-ml/               offline training scripts/notebooks (datasets git-ignored)
+apps/ai-service   FastAPI, optional TF-IDF inference service loads joblib model
+ml/               offline training, EDA, evaluation, and local artifacts (data git-ignored)
 packages/shared   shared TS types/schemas
 docs/spec.md
 docker-compose.yml
@@ -150,8 +150,8 @@ pnpm --filter web dev                 # web starts without errors
 | F8 | Domain reputation score | Medium |
 | F9 | History per browser session | Medium |
 | F10 | Cache by content hash / URL | Medium |
-| F11 | TF-IDF classifier for style signal (clickbait, sensational) | Low |
-| F12 | User feedback on results | Low |
+| F11 | Optional supervised TF-IDF fake/real classifier signal; does not decide evidence-based verdicts | Low |
+| F12 | User feedback on results | Low | 
 
 ## Non-functional
 - Latency: short article ~10-30s; async with progress for longer.
@@ -159,6 +159,7 @@ pnpm --filter web dev                 # web starts without errors
 - Security: block internal IPs (SSRF), cap response size, timeouts, sanitize input.
 - Always show disclaimer: AI-generated, may be wrong.
 - AI provider swappable behind one interface.
+- Optional TF-IDF classifier failure must not block or alter the evidence-based analysis; display its label/probabilities as a separate model signal only.
 
 ## Pipeline
 1. Input: extract content if URL.
@@ -171,14 +172,18 @@ pnpm --filter web dev                 # web starts without errors
 8. Persist, cache, stream to client.
 
 ## Classifier training (ml/)
-Role: secondary style signal only; never decides truth.
-- Data: VLSP 2020 ReINTEL, ViFactCheck (vi); LIAR, FakeNewsNet, ISOT (en).
-- Preprocess: NFC normalize, lowercase, strip URL/HTML, Vietnamese word segmentation, optional stopwords.
-- Features: word TF-IDF (1-2 gram, sublinear_tf, min_df 2-5, max_features 50k-200k) + char TF-IDF (3-5 gram), hstacked; optional handcrafted (title length, "!" count, uppercase ratio).
-- Models: compare Logistic Regression, LinearSVC (+CalibratedClassifierCV), Complement NB. Pick best by validation macro-F1. Try soft-voting ensemble only if scores are close.
-- Process: stratified split without duplicate articles across sets; sklearn Pipeline; GridSearchCV/RandomizedSearchCV; class_weight="balanced"; metrics: accuracy, precision, recall, macro-F1, ROC-AUC, confusion matrix.
-- Export: joblib, served at `/predict`. Explain via top linear coefficients.
-- Known limits: no semantics, dataset/source bias, weak on out-of-distribution news.
+Progress is tracked in [`ml/WBS.md`](ml/WBS.md); mark data-derived deliverables complete only after running them on an authorized dataset.
+Role: optional secondary dataset-classification signal; it never replaces evidence-based claim verdicts or changes `overall.credibility_score`.
+- Data: accepts a user-provided, provenance-verified CSV (`text`, `label`; `0=real`, `1=fake`) with optional `title`, which is concatenated with body; ignore `domain`. The current `vfnd_dataset_1000` folder is labeled VFND-Mini in its README, but its source/labeling was not independently verified. The original VFND authors request contact before use; follow their permission/attribution terms. Do not treat LLM-generated text as benchmark ground truth.
+- Preprocess: NFC normalize, lowercase, replace URL/number with tokens, strip special characters, remove empty/invalid rows, drop exact duplicate texts, and exclude texts with conflicting labels before splitting.
+- Features: word TF-IDF (1-2 gram) combined with character TF-IDF (2-4 gram).
+- Models: compare Multinomial Naive Bayes, Logistic Regression, calibrated Linear SVM, and Random Forest. Use balanced class weights where supported; Multinomial Naive Bayes uses uniform class priors (`fit_prior=false`).
+- Evaluation: stratified 80/20 holdout; choose the model by stratified 5-fold CV on the training split only. Report accuracy, macro precision/recall/F1 and holdout confusion matrix. If an authorized external set is supplied, remove exact text overlaps before evaluating it.
+- Outputs: cleaned CSV, EDA JSON/chart, model comparison CSV, training report, and best pipeline serialized with joblib under ignored `ml/artifacts/`.
+- Serving: retain FastAPI (confirmed choice; do not add Flask). `/predict` returns a model label and probabilities when an artifact exists. If unavailable, the evidence/Groq pipeline continues and omits the classifier signal. The UI labels this output as a secondary model signal, not a truth verdict.
+- The 85% accuracy/F1 figure is a target, not a guaranteed result. Report whether it is achieved on holdout/external data; do not train on or tune against the holdout.
+- Deduplicate across train/validation/test before reporting metrics. If no independent test examples remain, mark external validation blocked and do not claim real-world performance.
+- Known limits: small/biased dataset, no deep semantics, source/topic drift, and weak out-of-distribution performance.
 
 ## Result format
 ```json
@@ -190,6 +195,7 @@ Role: secondary style signal only; never decides truth.
     "text": "...", "verdict": "refuted", "confidence": 0.8, "reasoning": "...",
     "evidence": [{"title": "...", "url": "...", "snippet": "...", "stance": "refutes"}]
   }],
+  "classifier_signal": {"label": "fake", "confidence": 0.78, "probabilities": {"real": 0.22, "fake": 0.78}, "model_name": "Linear SVM", "model_version": "tfidf-baseline-v1", "top_features": []},
   "source_assessment": {"domain": "example.com", "reputation": "unknown"},
   "disclaimer": "AI-generated, verify independently."
 }
@@ -206,10 +212,13 @@ Role: secondary style signal only; never decides truth.
 | GET | /api/analyses | History (per session) |
 | POST | /api/analyses/:id/feedback | Submit feedback |
 
+Optional AI-service endpoints: `GET /health`, `GET /model/status`, and `POST /predict` (classifier signal only).
+
 ## Data model
 - analyses: id, input_type, input_text, url, content_hash, status, overall_score, label, created_at
 - claims: id, analysis_id, text, verdict, confidence, reasoning
 - evidence: id, claim_id, title, url, snippet, stance, source_domain
+- classifier_signals: analysis_id, label, confidence, real_probability, fake_probability, model_name, model_version, top_features
 - domains: domain, reputation_score, notes, updated_at
 - feedback: id, analysis_id, rating, comment
 
