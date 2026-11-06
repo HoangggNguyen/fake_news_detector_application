@@ -10,3 +10,4 @@ __pycache__/
 ml/data/
 ml/artifacts/
 apps/ai-service/requirements.lock
+!apps/web/.env.mock

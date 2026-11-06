@@ -53,6 +53,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@fake-news/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@tanstack/react-query':
         specifier: ^5.83.0
         version: 5.104.2(react@19.3.0)
