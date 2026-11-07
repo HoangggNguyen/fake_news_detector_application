@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AnalysisResult, DatasetSample } from '@fake-news/shared'
+import { ApiError, apiRequest, errorMessage } from './api'
+import { composerProblem, MIN_CONTENT_LENGTH } from './composerValidation'
 
 type InputMode = 'text' | 'url'
 type PageView = 'compose' | 'progress' | 'result' | 'history'
@@ -12,6 +14,9 @@ type Conversation = {
 }
 type User = { id: string; username: string }
 type ConversationAnalysis = AnalysisResult & { input_content: string; input_type: InputMode }
+
+/** Không nhận được cập nhật tiến trình trong khoảng này thì coi là kết nối theo dõi đã bị treo. */
+const PROGRESS_STALL_MS = 90_000
 
 const verdictLabels: Record<string, string> = {
   supported: 'Có bằng chứng ủng hộ',
@@ -77,18 +82,18 @@ export default function App() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // Tăng giá trị này để mở lại kết nối theo dõi tiến trình (nút "Kiểm tra lại").
+  const [progressAttempt, setProgressAttempt] = useState(0)
+  const problem = composerProblem(mode, content)
+  const canSubmit = !busy && !(view === 'progress' && !error) && content.trim().length >= MIN_CONTENT_LENGTH && !problem
 
   async function loadHistory() {
-    const response = await fetch('/api/conversations')
-    const body = await response.json() as { conversations?: Conversation[]; error?: string }
-    if (!response.ok) throw new Error(body.error ?? 'Không tải được lịch sử.')
+    const body = await apiRequest<{ conversations?: Conversation[] }>('/api/conversations')
     setHistory(body.conversations ?? [])
   }
 
   async function loadConversation(id: string) {
-    const response = await fetch(`/api/conversations/${id}`)
-    const body = await response.json() as { analyses?: ConversationAnalysis[]; error?: string }
-    if (!response.ok) throw new Error(body.error ?? 'Không tải được kết quả.')
+    const body = await apiRequest<{ analyses?: ConversationAnalysis[] }>(`/api/conversations/${id}`)
     setConversationId(id)
     const analyses = body.analyses ?? []
     const active = analyses.find((item) => item.status === 'pending' || item.status === 'processing')
@@ -105,14 +110,15 @@ export default function App() {
   }
 
   useEffect(() => {
-    void fetch('/api/auth/me').then(async (response) => {
-      if (response.status === 401) return
-      const body = await response.json() as { user?: User; error?: string }
-      if (!response.ok || !body.user) throw new Error(body.error ?? 'Không thể xác thực.')
+    void apiRequest<{ user?: User }>('/api/auth/me').then(async (body) => {
+      if (!body.user) throw new Error('missing user')
       setUser(body.user)
       await loadHistory()
-    }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Không thể xác thực.'))
-      .finally(() => setAuthLoading(false))
+    }).catch((cause: unknown) => {
+      // 401 nghĩa là chưa đăng nhập: hiện form đăng nhập, không báo lỗi.
+      if (cause instanceof ApiError && cause.status === 401) return
+      setError(errorMessage(cause, 'Không thể xác thực.'))
+    }).finally(() => setAuthLoading(false))
   }, [])
 
   async function submitAuth(event: React.FormEvent<HTMLFormElement>) {
@@ -120,18 +126,17 @@ export default function App() {
     setError('')
     setBusy(true)
     try {
-      const response = await fetch(`/api/auth/${authMode}`, {
+      const body = await apiRequest<{ user?: User }>(`/api/auth/${authMode}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ username, password }),
       })
-      const body = await response.json() as { user?: User; error?: string }
-      if (!response.ok || !body.user) throw new Error(body.error ?? 'Không thể đăng nhập.')
+      if (!body.user) throw new Error('missing user')
       setUser(body.user)
       setPassword('')
       await loadHistory()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Không thể đăng nhập.')
+      setError(errorMessage(cause, 'Không thể đăng nhập.'))
     } finally {
       setBusy(false)
     }
@@ -139,76 +144,125 @@ export default function App() {
 
   async function logout() {
     try {
-      const response = await fetch('/api/auth/logout', { method: 'POST' })
-      if (!response.ok) throw new Error('Không thể đăng xuất.')
+      await apiRequest('/api/auth/logout', { method: 'POST' })
       setUser(null)
       setResults([])
       setHistory([])
       setConversationId('')
       setView('compose')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Không thể đăng xuất.')
+      setError(errorMessage(cause, 'Không thể đăng xuất.'))
     }
   }
 
   async function importHistory() {
     try {
-      const response = await fetch('/api/conversations/import-legacy', {
+      const body = await apiRequest<{ imported?: number }>('/api/conversations/import-legacy', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ browser_id: getBrowserSessionId() }),
       })
-      const body = await response.json() as { imported?: number; error?: string }
-      if (!response.ok) throw new Error(body.error ?? 'Không thể chuyển lịch sử.')
       await loadHistory()
       window.alert(`Đã chuyển ${body.imported ?? 0} phân tích cũ.`)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Không thể chuyển lịch sử.')
+      setError(errorMessage(cause, 'Không thể chuyển lịch sử.'))
     }
   }
 
   useEffect(() => {
     if (view !== 'progress' || !analysisId) return
     const stream = new EventSource(`/api/analyses/${analysisId}/stream`)
+    let finished = false
+    let stallTimer = 0
+
+    const finish = () => {
+      finished = true
+      window.clearTimeout(stallTimer)
+      stream.close()
+    }
+
+    const openResult = () => {
+      void loadConversation(conversationId).then(loadHistory)
+        .catch((cause: unknown) => setError(errorMessage(cause, 'Không tải được kết quả.')))
+    }
+
+    // Kết nối theo dõi bị đứt hoặc im lặng quá lâu: hỏi trực tiếp trạng thái phân tích
+    // thay vì để người dùng đứng mãi ở màn hình tiến trình.
+    const recover = (reason: string) => {
+      if (finished) return
+      finish()
+      void apiRequest<{ status?: string }>(`/api/analyses/${analysisId}`).then((analysis) => {
+        if (analysis.status === 'completed') openResult()
+        else if (analysis.status === 'failed') setError('Phân tích thất bại. Bạn có thể gửi lại nội dung.')
+        else setError(reason)
+      }).catch((cause: unknown) => setError(errorMessage(cause, reason)))
+    }
+
+    const resetStallTimer = () => {
+      window.clearTimeout(stallTimer)
+      stallTimer = window.setTimeout(
+        () => recover('Chưa nhận được cập nhật tiến trình trong thời gian dài. Bấm "Kiểm tra lại" để xem kết quả.'),
+        PROGRESS_STALL_MS,
+      )
+    }
+    resetStallTimer()
+
     stream.addEventListener('progress', (event) => {
-      setProgress(JSON.parse((event as MessageEvent<string>).data) as ProgressUpdate)
+      resetStallTimer()
+      try {
+        setProgress(JSON.parse((event as MessageEvent<string>).data) as ProgressUpdate)
+      } catch {
+        // Bỏ qua gói tin tiến trình sai định dạng, giữ trạng thái hiện tại.
+      }
     })
     stream.addEventListener('complete', () => {
-      stream.close()
-      void loadConversation(conversationId).then(loadHistory)
-        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Không tải được kết quả.'))
+      finish()
+      openResult()
     })
     stream.addEventListener('analysis-error', (event) => {
-      stream.close()
-      const detail = JSON.parse((event as MessageEvent<string>).data) as { message?: string }
-      setError(detail.message ?? 'Phân tích thất bại.')
+      finish()
+      let message: string | undefined
+      try {
+        message = (JSON.parse((event as MessageEvent<string>).data) as { message?: string }).message
+      } catch {
+        message = undefined
+      }
+      setError(message ?? 'Phân tích thất bại.')
     })
-    return () => stream.close()
-  }, [analysisId, conversationId, view])
+    // EventSource tự kết nối lại khi mạng chập chờn; chỉ xử lý khi trình duyệt đã bỏ cuộc (CLOSED).
+    stream.onerror = () => {
+      if (stream.readyState === EventSource.CLOSED) {
+        recover('Mất kết nối khi theo dõi tiến trình. Bấm "Kiểm tra lại" để xem kết quả.')
+      }
+    }
+    return () => {
+      finished = true
+      window.clearTimeout(stallTimer)
+      stream.close()
+    }
+  }, [analysisId, conversationId, view, progressAttempt])
 
   async function submitAnalysis(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault()
     if (busy) return
     const submitted = content.trim()
-    if (submitted.length < 10) return
+    if (submitted.length < MIN_CONTENT_LENGTH || composerProblem(mode, submitted)) return
     setBusy(true)
     setError('')
     try {
       let activeConversation = conversationId
       if (!activeConversation) {
-        const create = await fetch('/api/conversations', { method: 'POST' })
-        const created = await create.json() as { id?: string; error?: string }
-        if (!create.ok || !created.id) throw new Error(created.error ?? 'Không tạo được cuộc trò chuyện.')
+        const created = await apiRequest<{ id?: string }>('/api/conversations', { method: 'POST' })
+        if (!created.id) throw new Error('missing conversation id')
         activeConversation = created.id
         setConversationId(activeConversation)
       }
-      const response = await fetch('/api/analyses', {
+      const body = await apiRequest<{ id?: string; status?: string }>('/api/analyses', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ type: mode, content: submitted, conversation_id: activeConversation }),
       })
-      const body = await response.json() as { id?: string; status?: string; error?: string }
-      if (!response.ok || !body.id) throw new Error(body.error ?? 'Không tạo được yêu cầu phân tích.')
+      if (!body.id) throw new Error('missing analysis id')
       setSubmittedContent(submitted)
       setContent('')
       setAnalysisId(body.id)
@@ -219,7 +273,7 @@ export default function App() {
         setView('progress')
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Không kết nối được API.')
+      setError(errorMessage(cause, 'Không tạo được yêu cầu phân tích.'))
     } finally {
       setBusy(false)
     }
@@ -228,9 +282,7 @@ export default function App() {
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.altKey || event.nativeEvent.isComposing || event.repeat) return
     event.preventDefault()
-    if (!busy && !(view === 'progress' && !error) && content.trim().length >= 10) {
-      void submitAnalysis()
-    }
+    if (canSubmit) void submitAnalysis()
   }
 
   async function showHistory() {
@@ -239,7 +291,7 @@ export default function App() {
     try {
       await loadHistory()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Không tải được lịch sử.')
+      setError(errorMessage(cause, 'Không tải được lịch sử.'))
     }
   }
 
@@ -275,7 +327,7 @@ export default function App() {
         <div className="sidebar-history">
           {history.slice(0, 8).map((item) => <button type="button" key={item.id} onClick={() => {
             setSidebarOpen(false)
-            void loadConversation(item.id).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Không tải được kết quả.'))
+            void loadConversation(item.id).catch((cause: unknown) => setError(errorMessage(cause, 'Không tải được kết quả.')))
           }}>
             <span>{item.title}</span>
           </button>)}
@@ -373,6 +425,7 @@ export default function App() {
             <progress className="progress-bar" max="100" value={progress.progress} />
             <div className="progress-meta"><span>{progress.stage}</span><span>{progress.progress}%</span></div>
             {error && <p className="error-message" role="alert">{error}</p>}
+            {error && <button className="retry-button" type="button" onClick={() => { setError(''); setProgressAttempt((value) => value + 1) }}>Kiểm tra lại</button>}
           </div></article>
         </section>}
         </div>}
@@ -380,7 +433,7 @@ export default function App() {
         {view === 'history' && <section className="history-view" aria-labelledby="page-title">
           <p className="eyebrow">TÀI KHOẢN NÀY</p><h1 id="page-title">Lịch sử<br /><em>kiểm chứng.</em></h1>
           {history.length ? <ul className="history-list">{history.map((item) => <li key={item.id}>
-            <button type="button" onClick={() => void loadConversation(item.id).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Không tải được kết quả.'))}>
+            <button type="button" onClick={() => void loadConversation(item.id).catch((cause: unknown) => setError(errorMessage(cause, 'Không tải được kết quả.')))}>
               <span className="history-type">{item.title}</span>
               <time>{new Date(item.created_at).toLocaleString('vi-VN')}</time>
             </button>
@@ -406,6 +459,8 @@ export default function App() {
               onChange={(event) => setContent(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               disabled={busy || (view === 'progress' && !error)}
+              aria-invalid={problem ? true : undefined}
+              aria-describedby={problem ? 'composer-problem' : undefined}
             />
           ) : (
             <input
@@ -416,11 +471,14 @@ export default function App() {
               value={content}
               onChange={(event) => setContent(event.target.value)}
               disabled={busy || (view === 'progress' && !error)}
+              aria-invalid={problem ? true : undefined}
+              aria-describedby={problem ? 'composer-problem' : undefined}
             />
           )}
+          {problem && <p className="composer-hint" id="composer-problem" aria-live="polite">{problem}</p>}
           <div className="form-footer">
             <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp có thể được gửi tới Groq để tạo câu hỏi.</span>
-            <button className="submit-button" type="submit" disabled={busy || (view === 'progress' && !error) || content.trim().length < 10}>
+            <button className="submit-button" type="submit" disabled={!canSubmit}>
               {busy ? 'Đang gửi...' : 'Phân tích'} <span aria-hidden="true">↗</span>
             </button>
           </div>

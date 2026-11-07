@@ -363,3 +363,8 @@ body { color: var(--ink); background: #faf9f6; }
   .welcome-block h1 { font-size: 32px; }
   .welcome-block .intro-copy { margin-top: 6px; }
 }
+
+/* Gợi ý lý do chưa gửi được và nút kiểm tra lại tiến trình */
+.composer-hint { margin: 6px 0 0; color: #a3372b; font-size: 12.5px; line-height: 1.5; }
+.analysis-form textarea[aria-invalid="true"], .analysis-form input[aria-invalid="true"] { box-shadow: inset 2px 0 0 #a3372b; }
+.retry-button { margin-top: 10px; border: 1px solid currentColor; padding: 6px 12px; border-radius: 999px; background: transparent; font-size: 12.5px; cursor: pointer; }
