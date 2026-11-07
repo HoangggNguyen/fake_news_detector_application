@@ -32,10 +32,17 @@ async def lifespan(application: FastAPI):
     application.state.dataset_lookup = None
     try:
         dataset_root = Path(__file__).resolve().parents[1]
-        application.state.dataset_lookup = DatasetLookup([
+        paths = [
             dataset_root / "vfnd_dataset_1000" / "train.csv",
             dataset_root / "vfnd_dataset_deduplicated" / "train.csv",
-        ])
+            dataset_root / "finance_data" / "train.csv",
+        ]
+        additional_dataset = dataset_root / "vfnd_dataset_10000_full" / "train.csv"
+        if additional_dataset.is_file():
+            paths.append(additional_dataset)
+        else:
+            logger.warning("Optional training dataset is missing: %s", additional_dataset)
+        application.state.dataset_lookup = DatasetLookup(paths)
     except (OSError, ValueError):
         logger.exception("Training datasets could not be loaded.")
     model_path = resolve_model_path()

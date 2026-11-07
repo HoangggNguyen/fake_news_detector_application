@@ -5,6 +5,8 @@ import { isPrivateAddress } from './article.js'
 import { analysisSchema } from './validation.js'
 import { fetchClassifierSignal } from './classifier.js'
 import { hashPassword, verifyPassword } from './auth.js'
+import { makeFollowUp } from './conversation.js'
+import type { DatasetResult } from './dataset.js'
 
 test('password verification accepts the correct password and rejects incorrect or invalid hashes', async () => {
   const hash = await hashPassword('fixture-password')
@@ -135,4 +137,35 @@ test('classifier service failures are non-fatal and valid signals are schema-che
   )
   assert.equal(signal?.label, 'fake')
   assert.equal(signal?.probabilities.fake, 0.8)
+})
+
+test('Groq only provides a question for unmatched input and cannot change the verdict', async () => {
+  const result: DatasetResult = { method: 'unresolved', label: null, match: null, suggestions: [], classifier: null }
+  let calls = 0
+  const fetcher: typeof fetch = async (_url, init) => {
+    calls++
+    assert.match(String(init?.body), /response_format/)
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ question: 'Bạn muốn kiểm chứng mức giá vào thời điểm nào?' }) } }] })
+  }
+  const followUp = await makeFollowUp('Giá vàng trong nước', result, { apiKey: 'fixture-key', fetcher })
+  assert.equal(followUp.status, 'ready')
+  assert.match(followUp.question ?? '', /\?$/)
+  assert.equal(result.label, null)
+  const matched: DatasetResult = { ...result, method: 'match', label: 'real' }
+  assert.deepEqual(await makeFollowUp('test input', matched, { apiKey: 'fixture-key', fetcher }), { question: null, status: 'not_needed' })
+  assert.equal(calls, 1)
+})
+
+test('Groq failure or fabricated link is explicitly marked unavailable', async () => {
+  const result: DatasetResult = { method: 'unresolved', label: null, match: null, suggestions: [], classifier: null }
+  const failure = await makeFollowUp('test input', result, {
+    apiKey: 'fixture-key', fetcher: async () => new Response('', { status: 503 }),
+  })
+  assert.equal(failure.status, 'unavailable')
+  const invalid = await makeFollowUp('test input', result, {
+    apiKey: 'fixture-key',
+    fetcher: async () => Response.json({ choices: [{ message: { content: '{"question":"Bạn xem https://madeup.example chưa?"}' } }] }),
+  })
+  assert.equal(invalid.status, 'unavailable')
+  assert.equal(invalid.question, null)
 })

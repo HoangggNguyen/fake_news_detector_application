@@ -196,3 +196,27 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - Persist lookup results in the additive `dataset_results` table and display matched/suggested samples in conversation history. The configured database migration was applied and verified.
 - The deduplicated train CSV currently contains an incomplete VFND_0994 row (row 15); it is logged and skipped, without modifying the user's data.
 - Python suite: 15 passed; API suite: 10 passed; API and web builds and Pylance syntax checks passed. An isolated temporary-account integration check verified the VFND_0991 real match, an unresolved similar input with suggestions, and saved conversation history; test data was removed. Restarted the AI service and verified both cases on the active service.
+
+## 2026-11-07 - Conversational responses
+
+- Removed news scores and model probability panels from the UI; dataset outcomes now use conversational text, source metadata marked unverified, and related items when available. Legacy results remain readable without scores.
+- TF-IDF lookup now also returns related items for exact matches. No new classifier training was performed.
+- For inputs without an exact match, Groq may generate one follow-up question; it cannot change the dataset label or sources. A missing key, invalid output, or provider error is displayed explicitly and does not erase the local result. Question status is stored alongside dataset results.
+- Documented that unmatched input, including extracted URL content, can be transmitted to Groq. No fabricated links are shown.
+- Focused AI tests and API tests passed; API/web builds passed. Local integration used a temporary account to verify an exact match, the gold topic, Groq follow-up, and persisted conversation history; temporary records and test services were removed. The browser mock check could not be completed.
+
+## 2026-11-07 - Financial data and full content
+
+- Added four original summaries of publicly sourced historical information, one each for gold, petroleum, exchange rates and securities, with source URLs and clear time context. The new finance dataset contains only supported examples; no fake financial labels were invented.
+- The lookup and saved result schema retain source URLs; matched and suggested items display their full stored text and link to a source when one exists. Older items without URLs remain readable and are marked unverified.
+- Fixed loading numeric 0/1 labels when incomplete CSV rows cause pandas to infer floats, and allowed single-class training inputs only when the merged training set still contains both labels. One incomplete existing dataset row is excluded.
+- Re-trained classifier `tfidf-baseline-v2` on 97 cleaned samples, including the four financial summaries. Logistic Regression was selected. Each existing external set has only three examples and contains no independent financial benchmark; measured results do not establish financial-domain accuracy. Previous artifacts were backed up in session storage.
+- AI tests: 18 passed; API tests: 12 passed; API and web builds passed. FastAPI TestClient returned relevant source-linked records for each of the four topics. Browser-level rendering was not verified; an attempted component test runner was incompatible with the current JSX configuration and was not retained.
+
+## VFND 10,000 dataset integration
+
+- Added the supplied `vfnd_dataset_10000_full/train.csv` to local lookup and training without modifying the dataset. Its 7,000 training rows normalize to 20 distinct samples (10 per label); validation/test contents overlap train and are not independent benchmarks. Label-revealing language in the data also limits meaningful generalization.
+- Normalized category and sample-number title decorations for matching and deduplication while retaining numeric differences and unresolved conflicting labels. Existing datasets remain usable if the optional new dataset is absent, with a warning.
+- Preserved full article text but did not promote the new dataset's unverified `url` column to a verified source link. The UI identifies content and sources without linked provenance as unverified.
+- Re-trained `tfidf-baseline-v3` on 117 cleaned examples from all four datasets; Multinomial Naive Bayes was selected. Each older external validation/test set contains only three examples, so its metrics do not establish real-world accuracy. Previous artifacts were backed up in session storage.
+- AI tests: 21 passed; API tests: 12 passed; web build passed. FastAPI TestClient verified the final artifact, all 20 new records by original title, normalized title and body, and the four existing finance suggestions. No services were listening on ports 8000, 3000 or 5173 at the final check; no browser test was performed.

@@ -57,6 +57,30 @@ def test_loader_combines_title_with_body_when_title_column_exists(tmp_path) -> N
     assert frame.loc[0, "text"] == "tieu de mau noi dung bai viet"
 
 
+def test_supplemental_single_class_requires_combined_dataset_to_have_both_labels(tmp_path) -> None:
+    source = tmp_path / "single_class.csv"
+    pd.DataFrame([{"title": "Ban tin", "text": "Noi dung", "label": 0}]).to_csv(source, index=False)
+    with pytest.raises(ValueError, match="hai nhãn"):
+        load_labeled_csv(source)
+    frame, _ = load_labeled_csv(source, require_both_labels=False)
+    with pytest.raises(ValueError, match="hai nhãn"):
+        combine_labeled_frames([frame])
+    combined, _ = combine_labeled_frames([frame, pd.DataFrame([{"text": "Tin gia", "label": 1}])])
+    assert set(combined["label"]) == {0, 1}
+
+
+def test_loader_accepts_numeric_labels_when_an_invalid_row_makes_column_float(tmp_path) -> None:
+    source = tmp_path / "numeric_labels.csv"
+    pd.DataFrame([
+        {"text": "Bai that", "label": 0},
+        {"text": "Bai gia", "label": 1},
+        {"text": "Bai thieu nhan", "label": None},
+    ]).to_csv(source, index=False)
+    frame, diagnostics = load_labeled_csv(source)
+    assert set(frame["label"]) == {0, 1}
+    assert diagnostics["invalid_rows_removed"] == 1
+
+
 def test_combine_training_frames_removes_cross_source_duplicates_and_conflicts() -> None:
     first = pd.DataFrame([
         {"text": "same text", "label": 0},

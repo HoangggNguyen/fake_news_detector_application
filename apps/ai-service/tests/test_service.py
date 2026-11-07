@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
 import joblib
+import logging
 import pandas as pd
 import pytest
+from pathlib import Path
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
@@ -58,3 +60,25 @@ def test_predict_returns_probability_when_artifact_is_available(monkeypatch, tmp
     with TestClient(app) as client:
         short_response = client.post("/predict", json={"text": "xin chao"})
     assert short_response.status_code == 422
+
+
+def test_missing_optional_dataset_keeps_existing_lookup(monkeypatch, tmp_path, caplog) -> None:
+    paths_seen = []
+    existing_is_file = Path.is_file
+
+    def is_file(path):
+        if path.parent.name == "vfnd_dataset_10000_full":
+            return False
+        return existing_is_file(path)
+
+    def create_lookup(paths):
+        paths_seen.extend(paths)
+        return object()
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr("app.main.DatasetLookup", create_lookup)
+    monkeypatch.setenv("MODEL_PATH", str(tmp_path / "not-trained.joblib"))
+    with caplog.at_level(logging.WARNING), TestClient(app):
+        assert app.state.dataset_lookup is not None
+    assert len(paths_seen) == 3
+    assert "Optional training dataset is missing" in caplog.text

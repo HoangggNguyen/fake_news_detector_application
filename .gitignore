@@ -13,4 +13,6 @@ apps/ai-service/vfnd_dataset_1000/
 apps/ai-service/vfnd_dataset_1000.zip
 apps/ai-service/vfnd_dataset_deduplicated/
 apps/ai-service/vfnd_dataset_deduplicated.zip
+apps/ai-service/vfnd_dataset_10000_full/
+apps/ai-service/vfnd_dataset_10000_full.zip
 apps/ai-service/requirements.lock

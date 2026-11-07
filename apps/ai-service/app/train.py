@@ -70,7 +70,7 @@ def main() -> None:
     args = parser.parse_args()
 
     training_paths = [args.input, *args.additional_train]
-    loaded_training = [load_labeled_csv(path) for path in training_paths]
+    loaded_training = [load_labeled_csv(path, require_both_labels=False) for path in training_paths]
     frame, merge_diagnostics = combine_labeled_frames(
         [loaded_frame for loaded_frame, _ in loaded_training]
     )

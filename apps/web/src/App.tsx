@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AnalysisResult } from '@fake-news/shared'
+import type { AnalysisResult, DatasetSample } from '@fake-news/shared'
 
 type InputMode = 'text' | 'url'
 type PageView = 'compose' | 'progress' | 'result' | 'history'
@@ -33,6 +33,22 @@ const evidenceTypeLabels: Record<string, string> = {
   trusted_press: 'Báo được ưu tiên đối chiếu',
   web_search: 'Nguồn tìm kiếm trên web',
   encyclopedia: 'Bách khoa tham khảo',
+}
+
+function displayTitle(title: string): string {
+  return title.replace(/\s*\((?:Mẫu|Cập nhật đợt|Cảnh báo mẫu)\s*#\d+\)\s*$/i, '').trim()
+}
+
+function SampleContent({ sample }: { sample: DatasetSample }) {
+  const sourceUrl = sample.source_url
+  const safeUrl = sourceUrl && /^https?:\/\//i.test(sourceUrl) ? sourceUrl : null
+  return <>
+    {!safeUrl && <p>Nội dung và nguồn do dữ liệu cung cấp, chưa được kiểm chứng.</p>}
+    <p>{sample.text}</p>
+    <p>Nguồn: {safeUrl
+      ? <a href={safeUrl} target="_blank" rel="noopener noreferrer">{sample.source} ↗</a>
+      : <>{sample.source} (chưa xác minh)</>}</p>
+  </>
 }
 
 function getBrowserSessionId(): string {
@@ -289,11 +305,11 @@ export default function App() {
           <div className="intro welcome-block">
             <p className="eyebrow">NEWSROOM / LAB</p>
             <h1 id="page-title">Mình cùng<br /><em>kiểm chứng nhé.</em></h1>
-            <p className="intro-copy">Gửi một đoạn tin hoặc đường dẫn. Mình sẽ lần theo từng tuyên bố và nguồn bằng chứng.</p>
+            <p className="intro-copy">Gửi một thông tin hoặc chủ đề, mình sẽ tìm nội dung liên quan để cùng bạn xem xét.</p>
           </div>
           <div className="workflow" aria-label="Quy trình phân tích">
-            <div><span>01</span><p>Tách tuyên bố</p></div><b aria-hidden="true">/</b>
-            <div><span>02</span><p>Tìm bằng chứng</p></div><b aria-hidden="true">/</b>
+            <div><span>01</span><p>Đọc thông tin</p></div><b aria-hidden="true">/</b>
+            <div><span>02</span><p>Tìm nội dung liên quan</p></div><b aria-hidden="true">/</b>
             <div><span>03</span><p>Đọc kết quả</p></div>
           </div>
         </>}
@@ -303,53 +319,36 @@ export default function App() {
           <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><p>{result.input_content || 'Nội dung đã gửi để phân tích'}</p></div></article>
           <article className="chat-message assistant-message"><span className="message-avatar assistant-avatar">N.</span><div className="message-body result-message-body">
           {result.status === 'completed' && result.overall ? <>
-          <div className="result-heading">
-            <div><p className="eyebrow">KẾT QUẢ PHÂN TÍCH</p><h1>Đánh giá<br /><em>có căn cứ.</em></h1></div>
-            {result.dataset_result?.method !== 'unresolved' && <div className="score-block"><strong>{Math.round(result.overall.credibility_score * 100)}</strong><span>/ 100</span><progress max="1" value={result.overall.credibility_score} /></div>}
-          </div>
-          <p className="result-label">{result.dataset_result?.match
-            ? (result.dataset_result.label === 'real' ? 'Tin thật theo dữ liệu giả lập' : 'Tin giả theo dữ liệu giả lập')
-            : result.dataset_result?.method === 'prediction'
-              ? (result.dataset_result.label === 'real' ? 'Classifier dự đoán tin thật' : 'Classifier dự đoán tin giả')
-            : resultLabels[result.overall.label] ?? result.overall.label}</p>
-          <p className="result-summary">{result.overall.summary}</p>
-          {result.dataset_result?.method === 'match' && <p>Điểm phản ánh nhãn mẫu giả lập, không phải xác suất đúng ngoài thực tế.</p>}
-          {result.dataset_result?.match && <section className="correction-panel" aria-label="Mẫu dữ liệu khớp">
-            <strong>Mẫu dữ liệu giả lập: {result.dataset_result.match.id}</strong>
-            <p>{result.dataset_result.match.title}</p>
-            <p>{result.dataset_result.match.text}</p>
-            <p>Nguồn ghi trong dữ liệu: {result.dataset_result.match.source} · {result.dataset_result.match.dataset}</p>
+          {result.dataset_result ? <>
+          <p className="result-summary">{result.dataset_result.method === 'match'
+            ? `Mình tìm thấy nội dung trùng khớp. Theo dữ liệu tham khảo, thông tin này được gắn nhãn ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}.`
+            : result.dataset_result.method === 'prediction'
+              ? `Mô hình dự đoán thông tin này nghiêng về ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}, nhưng mình chưa tìm thấy nội dung trùng khớp để đối chiếu.`
+              : 'Mình chưa tìm thấy nội dung đủ khớp để kết luận thông tin này là thật hay giả.'}</p>
+          {result.dataset_result.follow_up?.question && <p>{result.dataset_result.follow_up.question}</p>}
+          {result.dataset_result.follow_up?.status === 'unavailable' && <p>Phần hỗ trợ diễn đạt hiện không khả dụng. Bạn có thể gửi thêm nội dung cụ thể để mình xem xét.</p>}
+          {result.dataset_result.match && <section className="correction-panel" aria-label="Nội dung tham khảo">
+            <strong>Nội dung tham khảo</strong>
+            <p>{displayTitle(result.dataset_result.match.title)}</p>
+            <SampleContent sample={result.dataset_result.match} />
           </section>}
           {!!result.dataset_result?.suggestions.length && <section className="correction-panel" aria-label="Tin gợi ý">
-            <strong>Có phải bạn muốn hỏi một trong những thông tin này?</strong>
+            <strong>Bạn có thể muốn xem thêm:</strong>
             {result.dataset_result.suggestions.map((sample) => <article key={`${sample.dataset}-${sample.id}`}>
-              <p>{sample.title} — {sample.label === 'real' ? 'tin thật' : 'tin giả'} theo dữ liệu giả lập</p>
-              <p>{sample.text}</p>
-              <p>Mẫu {sample.id} · Nguồn ghi trong dữ liệu: {sample.source}</p>
+              <p>{displayTitle(sample.title)} — {sample.label === 'real' ? 'nhãn tin thật' : 'nhãn tin giả'}</p>
+              <SampleContent sample={sample} />
             </article>)}
           </section>}
-          {result.classifier_signal && <section className="style-signal" aria-label="Tín hiệu phụ từ mô hình phân loại">
-            <div className="style-signal-copy">
-              <p className="message-kicker">DỰ ĐOÁN · CLASSIFIER</p>
-              <strong>Model nghiêng về {result.classifier_signal.label === 'fake' ? 'tin giả' : 'tin thật'}</strong>
-              <span>Độ tin cậy {Math.round(result.classifier_signal.confidence * 100)}% · {result.classifier_signal.model_name}</span>
-            </div>
-            <div className="style-probabilities">
-              <span>Thật <b>{Math.round(result.classifier_signal.probabilities.real * 100)}%</b></span>
-              <span>Giả <b>{Math.round(result.classifier_signal.probabilities.fake * 100)}%</b></span>
-            </div>
-            {result.classifier_signal.top_features.length > 0 && <p className="style-top-features">
-              Feature trọng số cao: {result.classifier_signal.top_features.map((feature) => `${feature.feature} → ${feature.direction === 'fake' ? 'nghiêng giả' : 'nghiêng thật'}`).join(' · ')}
-            </p>}
-            <p className="style-signal-note">Điểm classifier chưa được hiệu chuẩn và không chứng minh tính đúng sai ngoài dữ liệu giả lập.</p>
-          </section>}
+          {!result.dataset_result.suggestions.length && <p>Mình chưa tìm thấy tin liên quan phù hợp để gợi ý thêm.</p>}
+          </> : <>
+          <p className="result-label">{resultLabels[result.overall.label] ?? result.overall.label}</p>
+          <p className="result-summary">{result.overall.summary}</p>
           {result.source_assessment.domain && <p className="source-assessment">Nguồn bài viết: <strong>{result.source_assessment.domain}</strong> · Uy tín: {result.source_assessment.reputation}</p>}
           <div className="claims-list">
             {result.claims.map((claim, index) => <article className="claim-item" key={`${claim.text}-${index}`}>
               <div className="claim-heading"><span className="claim-index">{String(index + 1).padStart(2, '0')}</span><span className={`verdict verdict-${claim.verdict}`}>{verdictLabels[claim.verdict] ?? claim.verdict}</span></div>
               <h2>{claim.text}</h2>
               <p>{claim.reasoning}</p>
-              <span className="confidence">Độ tin cậy đánh giá {Math.round(claim.confidence * 100)}%</span>
               {claim.verdict === 'refuted' && claim.correction && <aside className="correction-panel" aria-label="Thông tin đã chỉnh sửa theo nguồn">
                 <strong>Thông tin này có thể chưa chính xác. Có phải bạn muốn hỏi:</strong>
                 <p>{claim.correction}</p>
@@ -362,6 +361,7 @@ export default function App() {
               </li>)}</ul>}
             </article>)}
           </div>
+          </>}
           </> : <p>{result.status === 'failed' ? 'Phân tích thất bại.' : 'Đang xử lý phân tích.'}</p>}
           </div></article>
         </section>)}
@@ -419,7 +419,7 @@ export default function App() {
             />
           )}
           <div className="form-footer">
-            <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'}</span>
+            <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp có thể được gửi tới Groq để tạo câu hỏi.</span>
             <button className="submit-button" type="submit" disabled={busy || (view === 'progress' && !error) || content.trim().length < 10}>
               {busy ? 'Đang gửi...' : 'Phân tích'} <span aria-hidden="true">↗</span>
             </button>

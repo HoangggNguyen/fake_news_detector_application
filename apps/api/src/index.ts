@@ -11,6 +11,7 @@ import { extractArticle } from './article.js'
 import { analysisSchema } from './validation.js'
 import { classifierSignalSchema } from './classifier.js'
 import { classifyDataset, datasetResultSchema } from './dataset.js'
+import { makeFollowUp } from './conversation.js'
 import { authRouter, requireAuth, type AuthenticatedRequest } from './auth.js'
 
 const app = express()
@@ -95,21 +96,23 @@ async function processAnalysis(analysisId: string) {
       sourceUrl = extracted.url
     }
 
-    sendProgress(analysisId, 'evidence', 'Đang đối chiếu dữ liệu giả lập', 35)
+    sendProgress(analysisId, 'evidence', 'Đang đối chiếu thông tin', 35)
     const datasetResult = await classifyDataset(content, aiServiceUrl)
+    sendProgress(analysisId, 'response', 'Đang chuẩn bị câu trả lời', 65)
+    const followUp = await makeFollowUp(content, datasetResult)
     const match = datasetResult.match
     const result = aiResultSchema.parse({
       overall: {
         credibility_score: match ? (datasetResult.label === 'real' ? 1 : 0)
           : datasetResult.method === 'prediction' && datasetResult.classifier ? datasetResult.classifier.probabilities.real : 0.5,
         label: datasetResult.label ? (datasetResult.label === 'real' ? 'likely_true' : 'likely_false') : 'insufficient_evidence',
-        summary: match ? 'Nhãn theo mẫu khớp trong dữ liệu huấn luyện giả lập.'
+        summary: match ? 'Thông tin này khớp với nội dung trong dữ liệu tham khảo.'
           : datasetResult.method === 'prediction' ? 'Dự đoán từ classifier; chưa có mẫu khớp chính xác.'
             : 'Chưa tìm được mẫu khớp đủ rõ để kết luận.',
       },
       claims: [],
       classifier_signal: datasetResult.classifier,
-      source_assessment: { domain: null, reputation: 'Dữ liệu giả lập' },
+      source_assessment: { domain: null, reputation: 'Chưa xác minh' },
       disclaimer: '',
     })
     sendProgress(analysisId, 'save', 'Đang lưu kết quả', 85)
@@ -123,7 +126,7 @@ async function processAnalysis(analysisId: string) {
       )
       await connection.execute(
         'INSERT INTO dataset_results (analysis_id, result) VALUES (?, ?)',
-        [analysisId, JSON.stringify(datasetResult)],
+        [analysisId, JSON.stringify({ ...datasetResult, follow_up: followUp })],
       )
       for (const claim of result.claims) {
         const claimId = randomUUID()

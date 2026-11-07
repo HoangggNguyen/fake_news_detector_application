@@ -8,7 +8,7 @@
 
 - Web: React, TypeScript, Vite, Tailwind CSS.
 - API: Node.js, Express, MySQL; Redis/BullMQ là tùy chọn.
-- FastAPI đối chiếu dữ liệu train cục bộ và phục vụ classifier TF-IDF. Không gọi LLM hay tìm nguồn trên web để phân loại văn bản.
+- FastAPI đối chiếu dữ liệu train cục bộ và phục vụ classifier TF-IDF. Khi không có mẫu khớp, API có thể gọi Groq để tạo một câu hỏi tiếp theo; Groq không quyết định nhãn và không tìm nguồn web.
 
 ## Yêu cầu
 
@@ -47,7 +47,7 @@ test -f .env || cp .env.example .env
 Mở `.env` và cấu hình:
 
 - `DATABASE_URL`: địa chỉ, tài khoản và database MySQL. Compose bên dưới tạo mặc định database `fakenews`, user `mysql`, password `mysql` trên cổng `3306`.
-- Không cần cấu hình khóa LLM hoặc tìm kiếm để phân loại theo dữ liệu giả lập. Không commit hoặc chia sẻ file `.env`.
+- `GROQ_API_KEY` và tùy chọn `GROQ_MODEL`: bật câu hỏi tự nhiên khi không có mẫu khớp. Không commit hoặc chia sẻ file `.env`. Nếu thiếu khóa hoặc dịch vụ lỗi, giao diện thông báo phần diễn đạt không khả dụng và vẫn hiển thị kết quả tra cứu.
 
 Nếu đã có MySQL cục bộ với tài khoản khác, sửa `DATABASE_URL` cho phù hợp. Không thay đổi mật khẩu hoặc dữ liệu của một MySQL hiện có chỉ để khớp giá trị mẫu.
 
@@ -97,7 +97,7 @@ Mở giao diện tại <http://localhost:5173/>. Vite chuyển các request `/ap
 
 ### Chạy model classifier cùng backend
 
-API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:8000`). Service nạp hai file train khi khởi động, và nạp model từ `ml/artifacts/classifier.joblib` nếu có. Cần khởi động lại AI service sau khi sửa dữ liệu train. Nếu dataset hoặc service không sẵn sàng, phân tích thất bại thay vì âm thầm đổi sang tìm kiếm trên mạng.
+API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:8000`). Service nạp các file train khi khởi động, và nạp model từ `ml/artifacts/classifier.joblib` nếu có. Bộ `vfnd_dataset_10000_full` là tùy chọn: nếu thiếu, service ghi cảnh báo và vẫn nạp các bộ còn lại. Cần khởi động lại AI service sau khi sửa dữ liệu train hoặc model. Nếu dataset bắt buộc hoặc service không sẵn sàng, phân tích thất bại thay vì âm thầm đổi sang tìm kiếm trên mạng.
 
 ## Sử dụng
 
@@ -106,7 +106,9 @@ API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:800
 3. Nếu nội dung hoặc tiêu đề khớp mẫu train sau chuẩn hóa, xem nhãn và nguồn ghi trong mẫu giả lập. Nếu không khớp, classifier chỉ đưa dự đoán khi đủ độ dài và điểm tối thiểu 0,9; ngưỡng này là heuristic chưa hiệu chuẩn, không đảm bảo độ chính xác. Nếu chưa xác định, có thể xem tối đa ba mẫu gần giống; đây là gợi ý chứ không phải đính chính được xác minh. Mẫu trùng nhưng có nhãn trái nhau không được tự kết luận.
 4. Chọn một cuộc trò chuyện ở sidebar hoặc **Xem tất cả** để xem lại các lượt gửi và kết quả. Sau khi đăng nhập, nút **Chuyển lịch sử cũ của trình duyệt này** chủ động gắn các phân tích cũ vào tài khoản; mỗi phân tích cũ thành một cuộc trò chuyện riêng.
 
-Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, sử dụng chế độ văn bản. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
+Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, dùng chế độ văn bản và không cấu hình khóa Groq. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
+
+Với nội dung không khớp, tối đa 4.000 ký tự đầu của nội dung (bao gồm nội dung trích từ URL) được gửi tới Groq nếu cấu hình khóa. Không gửi thông tin nhạy cảm. Câu hỏi do Groq tạo chỉ là gợi ý hội thoại; nhãn và nguồn được lấy từ kết quả cục bộ. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
 
 ## Kiểm tra
 
@@ -135,9 +137,13 @@ pnpm --filter @fake-news/api test
 
 ## Huấn luyện classifier (tùy chọn)
 
-Hai thư mục `apps/ai-service/vfnd_dataset_1000` và `apps/ai-service/vfnd_dataset_deduplicated` được người dùng mô tả là dữ liệu giả lập, với nhãn được chấp nhận làm chuẩn cho môi trường test. Chúng không chứng minh tính đúng sai của sự kiện thực tế. Các thư mục dữ liệu bị git-ignore; không đưa dữ liệu vào commit khi chưa xác nhận quyền sử dụng.
+Ba thư mục `apps/ai-service/vfnd_dataset_1000`, `apps/ai-service/vfnd_dataset_deduplicated` và `apps/ai-service/vfnd_dataset_10000_full` được người dùng mô tả là dữ liệu giả lập, với nhãn được chấp nhận làm chuẩn cho môi trường test. Chúng không chứng minh tính đúng sai của sự kiện thực tế; URL và các tuyên bố xác thực trong bộ 10.000 chưa được kiểm chứng. Các thư mục dữ liệu bị git-ignore; không đưa dữ liệu vào commit khi chưa xác nhận quyền sử dụng.
+
+`apps/ai-service/finance_data/train.csv` bổ sung bốn bản tóm tắt viết lại từ nguồn công khai về vàng, xăng dầu, ngoại tệ và chứng khoán, mỗi bản có đường dẫn gốc và thời điểm cụ thể. Chúng là thông tin lịch sử, không phải báo giá hiện tại. Cả bốn mẫu đều được nguồn hỗ trợ; chưa có mẫu tin giả được kiểm chứng trong bộ tài chính này. Ứng dụng hiển thị toàn bộ bản tóm tắt đã lưu, không sao chép toàn văn bài báo nguồn.
 
 Kiểm tra split cho thấy 1.000 dòng chỉ có 80 nội dung duy nhất sau chuẩn hóa; 620 dòng trùng trong train, và mọi nội dung val/test đều đã xuất hiện trong train. Train unique có 60 nhãn thật/20 giả. Vì vậy không dùng val/test này làm external benchmark và không diễn giải 100% holdout/CV như độ chính xác trên tin mới. Raw data và zip đã được git-ignore.
+
+Bộ 10.000 có 7.000 dòng train, còn 20 mẫu sau chuẩn hóa; cả val và test đều trùng nội dung train, nên không dùng hai split đó làm đánh giá độc lập. Trong nội dung có các cụm từ lộ nhãn như “tin giả”, làm kết quả đánh giá dễ bị thổi phồng. Cột `url` của bộ này không được tự động biến thành liên kết nguồn đã kiểm chứng; văn bản gốc vẫn được giữ nguyên.
 
 CSV cần có cột `text`, `label` (`0=real`, `1=fake`) và có thể có `title` (được ghép với nội dung); cột domain nếu có sẽ bị bỏ qua. Tạo môi trường Python và cài dependencies:
 
@@ -156,14 +162,16 @@ Từ `apps/ai-service`, chạy huấn luyện và đánh giá:
 python -m app.train `
   --input vfnd_dataset_1000\train.csv `
   --additional-train vfnd_dataset_deduplicated\train.csv `
+  --additional-train finance_data\train.csv `
+  --additional-train vfnd_dataset_10000_full\train.csv `
   --external vfnd_dataset_deduplicated\val.csv `
   --external vfnd_dataset_deduplicated\test.csv `
   --output-dir ..\..\ml\artifacts
 ```
 
-`--input` và mỗi `--additional-train` được gộp sau chuẩn hóa; bản ghi trùng cùng nhãn chỉ giữ một, còn mọi nội dung trùng nhưng khác nhãn bị loại. `--external` có thể lặp lại; từng tập được báo cáo riêng và mẫu trùng với tập train bị loại trước khi tính điểm. Chỉ đưa dữ liệu có quyền sử dụng vào huấn luyện.
+`--input` và mỗi `--additional-train` được gộp sau chuẩn hóa; từng file có thể chỉ chứa một nhãn nhưng toàn bộ dữ liệu huấn luyện sau khi gộp phải có cả hai nhãn. Bản ghi trùng cùng nhãn chỉ giữ một, còn mọi nội dung trùng nhưng khác nhãn bị loại. `--external` có thể lặp lại; từng tập được báo cáo riêng và mẫu trùng với tập train bị loại trước khi tính điểm. Chỉ đưa dữ liệu có quyền sử dụng vào huấn luyện.
 
-Với bộ mới, chỉ dùng 14 mẫu `train.csv`; giữ `val.csv` và `test.csv` làm hai lần đánh giá riêng, không dùng `vfnd_full_dedup.csv` để huấn luyện trong cùng lần chạy vì sẽ làm lộ nội dung của hai tập đánh giá. Mỗi tập đánh giá chỉ có 3 mẫu, nên số liệu của chúng rất thiếu ổn định và không phải bằng chứng về độ chính xác thực tế. Đầu ra gồm cleaned CSV, EDA chart/JSON, bảng so sánh 4 mô hình, holdout metrics, đánh giá từng tập ngoài và `classifier.joblib` trong `ml/artifacts/` (đã gitignore). Mốc 85% là mục tiêu, không phải bảo đảm.
+Với bộ `vfnd_dataset_deduplicated`, file `train.csv` có 14 dòng nhưng hiện một dòng không đầy đủ và bị loại; giữ `val.csv` và `test.csv` làm hai lần đánh giá riêng, không dùng `vfnd_full_dedup.csv` để huấn luyện trong cùng lần chạy vì sẽ làm lộ nội dung của hai tập đánh giá. Mỗi tập đánh giá chỉ có 3 mẫu, nên số liệu của chúng rất thiếu ổn định và không phải bằng chứng về độ chính xác thực tế hay chất lượng phân loại tài chính. Đầu ra gồm cleaned CSV, EDA chart/JSON, bảng so sánh 4 mô hình, holdout metrics, đánh giá từng tập ngoài và `classifier.joblib` trong `ml/artifacts/` (đã gitignore). Mốc 85% là mục tiêu, không phải bảo đảm.
 
 Chạy AI service từ `apps/ai-service`:
 

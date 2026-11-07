@@ -52,6 +52,7 @@ export interface DatasetSample {
   source: string
   dataset: string
   label: 'real' | 'fake'
+  source_url?: string
 }
 
 export interface DatasetResult {
@@ -60,6 +61,10 @@ export interface DatasetResult {
   match: DatasetSample | null
   suggestions: DatasetSample[]
   classifier: ClassifierSignal | null
+  follow_up?: {
+    question: string | null
+    status: 'ready' | 'unavailable' | 'not_needed'
+  }
 }
 
 export interface AnalysisResult {

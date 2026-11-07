@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from numbers import Real
 from pathlib import Path
 from typing import Any, cast
 
@@ -42,7 +43,7 @@ URL_PATTERN = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)*")
 SPECIAL_PATTERN = re.compile(r"[^\w\s]", re.UNICODE)
 WHITESPACE_PATTERN = re.compile(r"\s+")
-MODEL_VERSION = "tfidf-baseline-v1"
+MODEL_VERSION = "tfidf-baseline-v3"
 
 
 def normalize_text(value: Any) -> str:
@@ -53,7 +54,7 @@ def normalize_text(value: Any) -> str:
     return WHITESPACE_PATTERN.sub(" ", text).strip()
 
 
-def load_labeled_csv(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
+def load_labeled_csv(path: Path, *, require_both_labels: bool = True) -> tuple[pd.DataFrame, dict[str, int]]:
     source = pd.read_csv(path, encoding="utf-8-sig")
     columns = {str(column).strip().casefold(): column for column in source.columns}
     if "text" not in columns or "label" not in columns:
@@ -66,7 +67,8 @@ def load_labeled_csv(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
         frame["text"] = title.str.cat(body, sep=" ").str.strip()
     frame["text"] = frame["text"].fillna("").astype(str).map(normalize_text)
     frame["label"] = frame["label"].map(
-        lambda value: LABEL_MAP.get(str(value).strip().casefold())
+        lambda value: int(value) if isinstance(value, Real) and value in (0, 1)
+        else LABEL_MAP.get(str(value).strip().casefold())
     )
     valid_rows = frame["text"].ne("") & frame["label"].notna()
     invalid_rows = int((~valid_rows).sum())
@@ -87,7 +89,9 @@ def load_labeled_csv(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
         "duplicate_rows_removed": before_deduplication - len(frame),
         "clean_rows": len(frame),
     }
-    if frame["label"].nunique() != 2:
+    if frame.empty:
+        raise ValueError("Sau làm sạch không còn mẫu hợp lệ.")
+    if require_both_labels and frame["label"].nunique() != 2:
         raise ValueError("Sau làm sạch cần còn đủ hai nhãn thật (0) và giả (1).")
     return frame, diagnostics
 

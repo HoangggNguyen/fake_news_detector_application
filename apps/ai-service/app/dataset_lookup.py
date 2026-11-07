@@ -13,14 +13,20 @@ from app.classifier import LABEL_MAP, predict_style
 
 logger = logging.getLogger(__name__)
 
+TITLE_SUFFIX = re.compile(r"\s*\((?:Mẫu|Cập nhật đợt|Cảnh báo mẫu)\s*#\d+\)\s*$", re.IGNORECASE)
+TITLE_CATEGORY = re.compile(r"^\s*\[[^\]]+\]\s*")
+
+
 def match_key(text: str) -> str:
     text = unicodedata.normalize("NFC", text).casefold()
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text)).strip()
 
 
 def title_key(title: str) -> str:
-    title = re.sub(r"\s*\(Mẫu\s*#\d+\)\s*$", "", title, flags=re.IGNORECASE)
-    if " - " in title:
+    title = TITLE_SUFFIX.sub("", title)
+    has_category = bool(TITLE_CATEGORY.match(title))
+    title = TITLE_CATEGORY.sub("", title)
+    if not has_category and " - " in title:
         title = title.split(" - ", 1)[1]
     return match_key(title)
 
@@ -47,6 +53,7 @@ class DatasetLookup:
                     self.samples.append({
                         "id": row["id"], "title": row["title"], "text": row["text"],
                         "source": row.get("source") or row["domain"],
+                        "source_url": row.get("source_url") or "",
                         "dataset": path.parent.name, "label": "fake" if label else "real",
                     })
         if not self.samples:
@@ -56,15 +63,15 @@ class DatasetLookup:
 
     def classify(self, text: str, artifact: dict[str, Any] | None) -> dict[str, Any]:
         normalized = match_key(text)
-        matches = [row for row in self.samples if normalized in {
-            title_key(row["title"]), match_key(row["title"]),
-            match_key(row["text"]),
-            match_key(row["title"] + " " + row["text"]),
-        }]
+        decorated_title = bool(TITLE_CATEGORY.match(text) or TITLE_SUFFIX.search(text))
+        matches = [row for row in self.samples if (
+            normalized in {
+                title_key(row["title"]), match_key(row["title"]),
+                match_key(row["text"]), match_key(row["title"] + " " + row["text"]),
+            }
+            or decorated_title and title_key(text) == title_key(row["title"])
+        )]
         labels = {row["label"] for row in matches}
-        if len(labels) == 1:
-            return {"method": "match", "label": labels.pop(), "match": matches[0], "suggestions": [], "classifier": None}
-
         scores = (self.matrix @ self.vectorizer.transform([normalized]).T).toarray().ravel()
         ranked = sorted(range(len(scores)), key=lambda index: scores[index], reverse=True)
         suggestions: list[dict[str, str]] = []
@@ -74,11 +81,15 @@ class DatasetLookup:
             key = (title_key(row["title"]), row["label"])
             if scores[index] < 0.3:
                 break
+            if len(labels) == 1 and title_key(row["title"]) == title_key(matches[0]["title"]):
+                continue
             if key not in titles:
                 suggestions.append(row)
                 titles.add(key)
             if len(suggestions) == 3:
                 break
+        if len(labels) == 1:
+            return {"method": "match", "label": labels.pop(), "match": matches[0], "suggestions": suggestions, "classifier": None}
         signal = None
         if artifact is not None and len(normalized.split()) >= int(artifact.get("min_training_words", 0)):
             signal = predict_style(artifact, text)
