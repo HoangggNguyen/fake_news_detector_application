@@ -98,7 +98,7 @@ function downloadPage(url: URL, addresses: LookupAddress[]): Promise<{
   })
 }
 
-export async function extractArticle(sourceUrl: string): Promise<{ text: string; url: string }> {
+export async function extractArticle(sourceUrl: string): Promise<{ text: string; url: string; title: string | null }> {
   let currentUrl = sourceUrl
   let response: Awaited<ReturnType<typeof downloadPage>> | undefined
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
@@ -118,10 +118,11 @@ export async function extractArticle(sourceUrl: string): Promise<{ text: string;
     throw new Error('URL không trả về nội dung HTML hoặc văn bản.')
   }
   const body = response.body
-  if (contentType.startsWith('text/plain')) return { text: body.slice(0, 100_000), url: currentUrl }
+  if (contentType.startsWith('text/plain')) return { text: body.slice(0, 100_000), url: currentUrl, title: null }
 
   const document = new JSDOM(body, { url: currentUrl }).window.document
-  const text = new Readability(document).parse()?.textContent?.replace(/\s+/g, ' ').trim()
+  const article = new Readability(document).parse()
+  const text = article?.textContent?.replace(/\s+/g, ' ').trim()
   if (!text) throw new Error('Không trích xuất được nội dung bài viết.')
-  return { text: text.slice(0, 100_000), url: currentUrl }
+  return { text: text.slice(0, 100_000), url: currentUrl, title: article?.title?.trim() || null }
 }

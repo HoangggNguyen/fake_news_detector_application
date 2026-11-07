@@ -126,3 +126,73 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - README/spec/WBS now state that the supplied splits are not independent and provenance is unverified. A separate provenance-verified dataset is required for a real external benchmark.
 - Loader combines the optional `title` with `text`; rerunning the train split retains 80 unique texts (60 real/20 fake), now 102-120 words after combination. Artifact regenerated and FastAPI reloaded; short sample still abstains with HTTP 422.
 - After reloading the title-aware artifact, a short phrase submitted through Express completed via Groq and the saved result had `classifier_signal: null`; the primary result was `insufficient_evidence`. FastAPI/MySQL health checks both returned 200.
+
+## 2026-11-07 - Evidence-backed corrections
+
+- Read this log, `spec.md`, `README.md`, and the AI analyzer, API persistence, shared result types, and result UI. The primary evidence-checking flow was implemented; the supervised classifier remained a prototype blocked from independent validation by overlapping/unverified data.
+- After the user approved the proposal, changed evidence retrieval to gather results from all configured providers, deduplicate URLs, label source types, and preserve provider failures in logs.
+- Tightened verdicts so cited evidence must have a matching stance. Added a correction only for a refuted claim with refuting citations from at least two distinct fact-check or recognized government/education domains; otherwise the correction is null.
+- Persisted correction/source metadata, updated the result contract and UI, updated the spec/README, and added a one-time migration for existing MySQL schemas.
+- `pnpm --filter @fake-news/api test`: 9 passed. `pnpm build` from `fakeapp/`: passed for API, shared package, and web. `git diff --check`: passed.
+- A root `pnpm build` from the parent workspace directory failed because that directory has no `package.json`; rerunning from `fakeapp/` succeeded.
+- Did not make a live LLM/search request or apply the SQL migration to a database. Existing databases must run `apps/api/db/migrations/20261107_claim_corrections_and_evidence_sources.sql` once before starting the updated API.
+- No new classifier training or real-world accuracy claim; independent evaluation remains blocked pending an authorized, non-overlapping dataset.
+
+## 2026-11-07 - Add deduplicated news split to classifier training
+
+- Inspected the user-provided `vfnd_dataset_deduplicated` README and aggregate CSV metadata with the AI-service virtual environment; did not print article text.
+- Confirmed 20 total rows (10 real / 10 fake), with 14 train rows (7 per class), 3 validation rows, and 3 test rows. The source, rights, and labeling process are not independently verified.
+- Verified with the project's loader that the new train split has no normalized text overlap with the existing train or its own validation/test splits.
+- Added repeatable `--additional-train` and `--external` arguments. Training inputs now deduplicate across files and remove same-text conflicting-label rows. Kept val/test separate from training.
+- Updated README, spec, WBS, and `.gitignore` so local news article files are not accidentally committed; added a regression test for cross-dataset deduplication/conflicts.
+- AI-service tests: 11 passed. Retrained the ignored classifier artifacts from 80 existing unique rows plus 14 new train rows (94 total, 67 real / 27 fake). New validation and test each scored 3/3 with zero overlap removed; these tiny scores are not reliable evidence of generalization. Internal CV/holdout was also 100% and is not claimed as real-world accuracy.
+- Selected model: Multinomial Naive Bayes; regenerated artifact's minimum input length is 55 words. FastAPI was not restarted, so an already-running process must be restarted to load the new artifact.
+
+## 2026-11-07 - Fix analysis result endpoint 503
+
+- Reproduced the reported request: API health was 200, but `GET /api/analyses/:id` returned a generic 503; the Vite proxy passed through the same response.
+- Queried the configured database schema and confirmed `claims.correction` and `evidence.source_type` were missing, although the current result loader selects both columns.
+- Applied only the additive migration columns to the configured MySQL database; existing rows were preserved. Verified both columns are present.
+- Retested the supplied analysis ID with the supplied session ID through the API and Vite proxy: both returned HTTP 200. The stored analysis itself is `completed` with `insufficient_evidence` and no extracted claims; this is its saved analysis outcome, not a remaining HTTP error.
+- `/health` remains HTTP 200 with database `ok`; `git diff --check` passes.
+
+## 2026-11-07 - Start trained classifier with backend
+
+- Confirmed the API already calls the optional FastAPI classifier through `AI_SERVICE_URL` (configured to `http://localhost:8000`); the newly trained `ml/artifacts/classifier.joblib` existed, but port 8000 had no listener.
+- Added a VS Code `Debug AI Service` launch configuration using the AI-service venv and a `Debug Backend + AI` compound launch; documented the startup and readiness check.
+- Started Uvicorn on `127.0.0.1:8000`. `/health` reports classifier `ready`; `/model/status` reports Multinomial Naive Bayes `tfidf-baseline-v1`.
+- Sent a synthetic technical smoke-test input through `/predict`; inference returned a valid label and probability distribution. This verifies model loading/inference only, not news-classification accuracy.
+- API/MySQL health remains `ok`. `launch.json` parses as JSON and `git diff --check` passes. The API process remains independently managed; use the VS Code compound configuration to start both processes together in future sessions.
+
+## 2026-11-07 - Document AI service startup command
+
+- Added the missing third PowerShell terminal command to the README: activate `apps/ai-service/.venv`, then launch `python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`.
+- Documented that all three services should remain running and linked the model readiness endpoint. The existing VS Code compound launch remains an alternative.
+- Documentation-only change; no test run required.
+
+## 2026-11-07 - Account conversations and evidence suggestions
+
+- Added local registration/login/logout with scrypt password verification and database-backed HTTP-only login sessions. Per explicit user request, `users.real_pass` also stores the plaintext password; this is unsafe for real users or public deployment. No credentials were recorded in this log.
+- Added account-owned conversations and per-conversation analysis history, ordered by an auto-incremented turn number. Each submission creates a separate turn even if the same content is sent again.
+- Added an explicit browser-history import into the signed-in account; legacy analyses are not moved until requested, and each legacy analysis becomes its own conversation.
+- Updated the UI to show conversation history and evidence-backed suggestions. Added a preferred-source Tavily query for Tuoi Tre, VnExpress and Thanh Nien, while retaining the requirement for refuting evidence and multiple eligible domains before suggesting a correction.
+- Applied the additive account/conversation migration to the configured MySQL database after inspecting for existing tables/columns.
+- `pnpm build` passed; `pnpm --filter @fake-news/api test` passed 10 tests. On an isolated temporary API process, integration checks passed for registration, password verification, separate-account authorization, ordered turns, explicit legacy import, logout and login. Temporary test records were removed and the helper process stopped.
+- A second isolated API smoke check submitted two non-sensitive sample claims to the configured provider, waited for both analyses to complete, and confirmed both turns were persisted and returned in order. The temporary account and analyses were removed, and the helper process was stopped.
+- Existing classifier accuracy and provenance limitations remain unchanged. Live editorial-source search and AI-generated correction quality have not been independently benchmarked.
+
+## 2026-11-07 - Streamline history and inspect training example
+
+- Replaced the duplicate history navigation buttons with a "Xem tất cả" action beneath recent conversations and removed the English disclaimer from the result view. The complete history and the Vietnamese source-check reminder remain available.
+- The VFND_0991 training example has label 0 and names the government portal, but does not contain a specific source URL, decree number, or date. The classifier training pipeline does not use the source column as an evidence database.
+- Verified that the supplied 10-word headline is rejected by the classifier's 55-word minimum. This does not by itself determine the separate evidence-based verdict.
+- At the user's choice, removed the 1–5 feedback controls from the UI while retaining the existing backend endpoint and stored feedback. The /100 score and evidence-based verdict logic were not changed.
+- `pnpm --filter @fake-news/web build` and `git diff --check` passed after the UI changes.
+
+## 2026-11-07 - Simulated dataset classification
+
+- Per user clarification, use both local train CSVs as simulated labeled data; do not call the web evidence/LLM pipeline for text classification. URL input still downloads the submitted URL. Validation/test splits remain outside the lookup.
+- Match normalized titles or full text with number preservation; conflicting labels remain unresolved. Otherwise return up to three similar samples, with a classifier prediction only when its input length requirement and the uncalibrated 0.9 threshold are met. Sources are displayed as simulated metadata, not verified links.
+- Persist lookup results in the additive `dataset_results` table and display matched/suggested samples in conversation history. The configured database migration was applied and verified.
+- The deduplicated train CSV currently contains an incomplete VFND_0994 row (row 15); it is logged and skipped, without modifying the user's data.
+- Python suite: 15 passed; API suite: 10 passed; API and web builds and Pylance syntax checks passed. An isolated temporary-account integration check verified the VFND_0991 real match, an unresolved similar input with suggestions, and saved conversation history; test data was removed. Restarted the AI service and verified both cases on the active service.

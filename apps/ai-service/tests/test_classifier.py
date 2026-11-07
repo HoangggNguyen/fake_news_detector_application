@@ -8,6 +8,7 @@ from sklearn.pipeline import Pipeline
 
 from app.classifier import (
     build_features,
+    combine_labeled_frames,
     evaluate_external,
     load_labeled_csv,
     normalize_text,
@@ -54,6 +55,31 @@ def test_loader_combines_title_with_body_when_title_column_exists(tmp_path) -> N
     frame, _ = load_labeled_csv(source)
 
     assert frame.loc[0, "text"] == "tieu de mau noi dung bai viet"
+
+
+def test_combine_training_frames_removes_cross_source_duplicates_and_conflicts() -> None:
+    first = pd.DataFrame([
+        {"text": "same text", "label": 0},
+        {"text": "conflicting text", "label": 0},
+        {"text": "first real", "label": 0},
+        {"text": "first fake", "label": 1},
+    ])
+    second = pd.DataFrame([
+        {"text": "same text", "label": 0},
+        {"text": "conflicting text", "label": 1},
+        {"text": "second real", "label": 0},
+        {"text": "second fake", "label": 1},
+    ])
+
+    combined, diagnostics = combine_labeled_frames([first, second])
+
+    assert len(combined) == 5
+    assert diagnostics == {
+        "input_rows": 8,
+        "conflicting_rows_removed": 2,
+        "duplicate_rows_removed": 1,
+        "clean_rows": 5,
+    }
 
 
 def test_feature_pipeline_combines_word_and_character_ngrams() -> None:

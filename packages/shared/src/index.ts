@@ -18,6 +18,7 @@ export interface Evidence {
   url: string
   snippet: string
   stance: 'supports' | 'refutes' | 'context'
+  source_type: 'fact_check' | 'official' | 'trusted_press' | 'web_search' | 'encyclopedia'
 }
 
 export interface ClaimResult {
@@ -25,6 +26,7 @@ export interface ClaimResult {
   verdict: ClaimVerdict
   confidence: number
   reasoning: string
+  correction: string | null
   evidence: Evidence[]
 }
 
@@ -43,6 +45,23 @@ export interface ClassifierSignal {
   }>
 }
 
+export interface DatasetSample {
+  id: string
+  title: string
+  text: string
+  source: string
+  dataset: string
+  label: 'real' | 'fake'
+}
+
+export interface DatasetResult {
+  method: 'match' | 'prediction' | 'unresolved'
+  label: 'real' | 'fake' | null
+  match: DatasetSample | null
+  suggestions: DatasetSample[]
+  classifier: ClassifierSignal | null
+}
+
 export interface AnalysisResult {
   id: string
   status: AnalysisStatus
@@ -57,5 +76,6 @@ export interface AnalysisResult {
     reputation: string
   }
   classifier_signal?: ClassifierSignal | null
+  dataset_result?: DatasetResult | null
   disclaimer: string
 }

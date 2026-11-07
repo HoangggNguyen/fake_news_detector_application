@@ -1,11 +1,16 @@
 # Fake News Detector: Spec
 
+## Current test-mode behavior (2026-11-07)
+
+The active analysis flow uses the two local training CSVs as simulated labeled data, not live web evidence. Exact normalized matches use the dataset label; otherwise a classifier prediction requires the existing minimum input length and a 0.9 heuristic confidence threshold, or returns an unresolved result with up to three similar samples. Sources in the data are simulated metadata. Validation and test splits remain separate. Results are saved in `dataset_results`; URL inputs still fetch the supplied URL. The older evidence/LLM design below is historical and does not describe the active analysis flow.
+
 ## Goal
 Web app: user submits text or URL, gets a **credibility score** with per-claim evidence and sources. Output is a score with explanation, never an absolute true/false label. MVP targets Vietnamese, zero running cost (free tiers / open source).
 
 ## Scope
-- In (MVP): text/URL input, content extraction, claim extraction, evidence retrieval, verdicts, source links, result cache, history per browser.
-- Out (MVP): image/video/deepfake, extension, mobile app, accounts, payments.
+- In (MVP): text/URL input, content extraction, claim extraction, evidence retrieval, verdicts, source links, local accounts, account-owned conversation history.
+- Out (MVP): image/video/deepfake, extension, mobile app, payments.
+- Security warning: by user request, `users.real_pass` stores passwords in plaintext in addition to the password hash used for authentication. This is unsafe for real users or public deployment. Use only dedicated test passwords and remove the plaintext requirement before production.
 
 ## Architecture
 ```
@@ -148,8 +153,8 @@ pnpm --filter web dev                 # web starts without errors
 | F6 | Aggregate overall credibility score | High |
 | F7 | Show cited sources with links | High |
 | F8 | Domain reputation score | Medium |
-| F9 | History per browser session | Medium |
-| F10 | Cache by content hash / URL | Medium |
+| F9 | Account-owned conversations with ordered analysis history | Medium |
+| F10 | Preserve repeated submissions as separate conversation turns | Medium |
 | F11 | Optional supervised TF-IDF fake/real classifier signal; does not decide evidence-based verdicts | Low |
 | F12 | User feedback on results | Low | 
 
@@ -174,11 +179,11 @@ pnpm --filter web dev                 # web starts without errors
 ## Classifier training (ml/)
 Progress is tracked in [`ml/WBS.md`](ml/WBS.md); mark data-derived deliverables complete only after running them on an authorized dataset.
 Role: optional secondary dataset-classification signal; it never replaces evidence-based claim verdicts or changes `overall.credibility_score`.
-- Data: accepts a user-provided, provenance-verified CSV (`text`, `label`; `0=real`, `1=fake`) with optional `title`, which is concatenated with body; ignore `domain`. The current `vfnd_dataset_1000` folder is labeled VFND-Mini in its README, but its source/labeling was not independently verified. The original VFND authors request contact before use; follow their permission/attribution terms. Do not treat LLM-generated text as benchmark ground truth.
+- Data: accepts one primary and zero or more additional user-provided training CSVs (`text`, `label`; `0=real`, `1=fake`) with optional `title`, which is concatenated with body; ignore `domain`. Normalize and deduplicate across all training inputs; remove normalized texts with conflicting labels. The `vfnd_dataset_1000` and `vfnd_dataset_deduplicated` folders are user-provided, but their source/labeling has not been independently verified. The latter has 14 train rows and 3 rows each in validation/test; retain those splits for evaluation and do not use the full CSV in training for the same run. The original VFND authors request contact before use; follow their permission/attribution terms. Do not treat LLM-generated text as benchmark ground truth.
 - Preprocess: NFC normalize, lowercase, replace URL/number with tokens, strip special characters, remove empty/invalid rows, drop exact duplicate texts, and exclude texts with conflicting labels before splitting.
 - Features: word TF-IDF (1-2 gram) combined with character TF-IDF (2-4 gram).
 - Models: compare Multinomial Naive Bayes, Logistic Regression, calibrated Linear SVM, and Random Forest. Use balanced class weights where supported; Multinomial Naive Bayes uses uniform class priors (`fit_prior=false`).
-- Evaluation: stratified 80/20 holdout; choose the model by stratified 5-fold CV on the training split only. Report accuracy, macro precision/recall/F1 and holdout confusion matrix. If an authorized external set is supplied, remove exact text overlaps before evaluating it.
+- Evaluation: stratified 80/20 holdout; choose the model by stratified 5-fold CV on the training split only. Report accuracy, macro precision/recall/F1 and holdout confusion matrix. Accept multiple authorized external sets and remove exact normalized text overlaps before evaluating each independently.
 - Outputs: cleaned CSV, EDA JSON/chart, model comparison CSV, training report, and best pipeline serialized with joblib under ignored `ml/artifacts/`.
 - Serving: retain FastAPI (confirmed choice; do not add Flask). `/predict` returns a model label and probabilities when an artifact exists. If unavailable, the evidence/Groq pipeline continues and omits the classifier signal. The UI labels this output as a secondary model signal, not a truth verdict.
 - The 85% accuracy/F1 figure is a target, not a guaranteed result. Report whether it is achieved on holdout/external data; do not train on or tune against the holdout.
@@ -193,7 +198,8 @@ Role: optional secondary dataset-classification signal; it never replaces eviden
   "overall": {"credibility_score": 0.32, "label": "likely_false", "summary": "..."},
   "claims": [{
     "text": "...", "verdict": "refuted", "confidence": 0.8, "reasoning": "...",
-    "evidence": [{"title": "...", "url": "...", "snippet": "...", "stance": "refutes"}]
+    "correction": "Thông tin đã chỉnh sửa dựa trên dẫn chứng, hoặc null",
+    "evidence": [{"title": "...", "url": "...", "snippet": "...", "stance": "refutes", "source_type": "fact_check"}]
   }],
   "classifier_signal": {"label": "fake", "confidence": 0.78, "probabilities": {"real": 0.22, "fake": 0.78}, "model_name": "Linear SVM", "model_version": "tfidf-baseline-v1", "top_features": []},
   "source_assessment": {"domain": "example.com", "reputation": "unknown"},
@@ -202,6 +208,8 @@ Role: optional secondary dataset-classification signal; it never replaces eviden
 ```
 - Claim verdict: `supported | refuted | mixed | unverifiable`
 - Overall label: `likely_true | mixed | likely_false | insufficient_evidence`
+- Evidence sources are gathered from all configured providers and deduplicated by URL. `source_type` identifies fact-check results, recognized government/education domains, selected press domains, general web results, or encyclopedia context; it is a source hint, not a guarantee of reliability. A separate Tavily query prioritizes the selected press domains.
+- A correction is shown only for a `refuted` claim with cited refuting evidence from at least two distinct fact-check, selected press, or recognized government/education domains. Otherwise `correction` is `null`; conflicting or insufficient evidence must not produce an asserted correction.
 
 ## API
 | Method | Endpoint | Purpose |
@@ -215,6 +223,9 @@ Role: optional secondary dataset-classification signal; it never replaces eviden
 Optional AI-service endpoints: `GET /health`, `GET /model/status`, and `POST /predict` (classifier signal only).
 
 ## Data model
+- users: id, username, password_hash, real_pass (plaintext; unsafe and not suitable for production)
+- login_sessions: token_hash, user_id, expires_at
+- conversations: id, user_id, title, created_at, updated_at
 - analyses: id, input_type, input_text, url, content_hash, status, overall_score, label, created_at
 - claims: id, analysis_id, text, verdict, confidence, reasoning
 - evidence: id, claim_id, title, url, snippet, stance, source_domain

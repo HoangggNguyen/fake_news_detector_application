@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from app.classifier import predict_style
+from app.dataset_lookup import DatasetLookup
 
 logger = logging.getLogger(__name__)
 repository_root = Path(__file__).resolve().parents[3]
@@ -28,6 +29,15 @@ def resolve_model_path() -> Path:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     application.state.classifier_artifact = None
+    application.state.dataset_lookup = None
+    try:
+        dataset_root = Path(__file__).resolve().parents[1]
+        application.state.dataset_lookup = DatasetLookup([
+            dataset_root / "vfnd_dataset_1000" / "train.csv",
+            dataset_root / "vfnd_dataset_deduplicated" / "train.csv",
+        ])
+    except (OSError, ValueError):
+        logger.exception("Training datasets could not be loaded.")
     model_path = resolve_model_path()
     try:
         artifact = joblib.load(model_path)
@@ -79,3 +89,11 @@ def predict(request: PredictionRequest) -> dict[str, Any]:
         return predict_style(artifact, request.text)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/dataset/classify")
+def classify_dataset(request: PredictionRequest) -> dict[str, Any]:
+    lookup = app.state.dataset_lookup
+    if lookup is None:
+        raise HTTPException(status_code=503, detail="Training datasets are unavailable.")
+    return lookup.classify(request.text, app.state.classifier_artifact)

@@ -11,7 +11,12 @@ import matplotlib.pyplot as plt
 import joblib
 import pandas as pd
 
-from app.classifier import evaluate_external, load_labeled_csv, train_and_evaluate
+from app.classifier import (
+    combine_labeled_frames,
+    evaluate_external,
+    load_labeled_csv,
+    train_and_evaluate,
+)
 
 
 def write_eda(frame: pd.DataFrame, diagnostics: dict[str, int], output_dir: Path) -> None:
@@ -46,22 +51,55 @@ def write_eda(frame: pd.DataFrame, diagnostics: dict[str, int], output_dir: Path
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train and evaluate the Vietnamese TF-IDF baseline.")
     parser.add_argument("--input", type=Path, required=True, help="Authorized CSV with text and label columns")
-    parser.add_argument("--external", type=Path, help="Optional independent labeled CSV for out-of-source testing")
+    parser.add_argument(
+        "--additional-train",
+        type=Path,
+        action="append",
+        default=[],
+        help="Additional authorized training CSV; may be supplied more than once",
+    )
+    parser.add_argument(
+        "--external",
+        type=Path,
+        action="append",
+        default=[],
+        help="Independent labeled CSV for evaluation; may be supplied more than once",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("../../ml/artifacts"))
     parser.add_argument("--random-state", type=int, default=42)
     args = parser.parse_args()
 
-    frame, diagnostics = load_labeled_csv(args.input)
-    write_eda(frame, diagnostics, args.output_dir)
+    training_paths = [args.input, *args.additional_train]
+    loaded_training = [load_labeled_csv(path) for path in training_paths]
+    frame, merge_diagnostics = combine_labeled_frames(
+        [loaded_frame for loaded_frame, _ in loaded_training]
+    )
+    training_diagnostics = {
+        str(path): diagnostics
+        for path, (_, diagnostics) in zip(training_paths, loaded_training, strict=True)
+    }
+    write_eda(frame, merge_diagnostics, args.output_dir)
     result = train_and_evaluate(frame, args.output_dir, args.random_state)
-    result["cleaning"] = diagnostics
+    result["cleaning"] = merge_diagnostics
+    result["training_sources"] = [str(path) for path in training_paths]
+    result["source_cleaning"] = training_diagnostics
+    result["merged_training"] = merge_diagnostics
     if args.external:
-        external_frame, external_diagnostics = load_labeled_csv(args.external)
         artifact = joblib.load(args.output_dir / "classifier.joblib")
-        result["external_evaluation"] = evaluate_external(
-            artifact["pipeline"], external_frame, frame["text"]
-        )
-        result["external_cleaning"] = external_diagnostics
+        external_evaluations = []
+        for path in args.external:
+            external_frame, external_diagnostics = load_labeled_csv(path)
+            metrics = evaluate_external(artifact["pipeline"], external_frame, frame["text"])
+            external_evaluations.append({
+                "source": str(path),
+                "cleaning": external_diagnostics,
+                "metrics": metrics,
+            })
+        if len(external_evaluations) == 1:
+            result["external_evaluation"] = external_evaluations[0]["metrics"]
+            result["external_cleaning"] = external_evaluations[0]["cleaning"]
+        else:
+            result["external_evaluations"] = external_evaluations
     (args.output_dir / "training_report.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
     )

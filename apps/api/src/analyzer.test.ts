@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { aggregateCredibility, restrictCitations } from './analyzer.js'
+import { aggregateCredibility, canOfferCorrection, restrictCitations, supportsVerdict } from './analyzer.js'
 import { isPrivateAddress } from './article.js'
 import { analysisSchema } from './validation.js'
 import { fetchClassifierSignal } from './classifier.js'
+import { hashPassword, verifyPassword } from './auth.js'
+
+test('password verification accepts the correct password and rejects incorrect or invalid hashes', async () => {
+  const hash = await hashPassword('fixture-password')
+  assert.notEqual(hash, 'fixture-password')
+  assert.equal(await verifyPassword('fixture-password', hash), true)
+  assert.equal(await verifyPassword('incorrect-password', hash), false)
+  assert.equal(await verifyPassword('fixture-password', 'invalid'), false)
+})
 
 test('unverifiable claims do not create a false or true score', () => {
   assert.deepEqual(aggregateCredibility([{ verdict: 'unverifiable', confidence: 0 }]), {
@@ -35,7 +44,13 @@ test('private and non-routable IP addresses are rejected for article URLs', () =
 })
 
 test('citations are limited to retrieved URLs and retain their stance', () => {
-  const evidence = [{ title: 'Retrieved', url: 'https://example.com/fact#section', snippet: 'Evidence', stance: 'context' as const }]
+  const evidence = [{
+    title: 'Retrieved',
+    url: 'https://example.com/fact#section',
+    snippet: 'Evidence',
+    stance: 'context' as const,
+    source_type: 'web_search' as const,
+  }]
   assert.deepEqual(restrictCitations(evidence, [
     { url: 'https://example.com/fact', stance: 'refutes' },
     { url: 'https://fabricated.example/source', stance: 'supports' },
@@ -43,11 +58,52 @@ test('citations are limited to retrieved URLs and retain their stance', () => {
   ]), [{ ...evidence[0], stance: 'refutes' }])
 })
 
+test('verdicts require evidence with a matching stance', () => {
+  const refutation = [{
+    title: 'Fact check',
+    url: 'https://factcheck.example/review',
+    snippet: 'Refutes the claim',
+    stance: 'refutes' as const,
+    source_type: 'fact_check' as const,
+  }]
+  assert.equal(supportsVerdict('refuted', refutation), true)
+  assert.equal(supportsVerdict('supported', refutation), false)
+  assert.equal(supportsVerdict('mixed', refutation), false)
+})
+
+test('corrections require a refuted claim and two eligible source domains', () => {
+  const evidence = [
+    {
+      title: 'Review one',
+      url: 'https://review.example/check',
+      snippet: 'Refutes the claim',
+      stance: 'refutes' as const,
+      source_type: 'fact_check' as const,
+    },
+    {
+      title: 'Official record',
+      url: 'https://health.gov.vn/record',
+      snippet: 'Refutes the claim',
+      stance: 'refutes' as const,
+      source_type: 'official' as const,
+    },
+  ]
+  assert.equal(canOfferCorrection('refuted', 'Corrected statement.', evidence), true)
+  assert.equal(canOfferCorrection('supported', 'Corrected statement.', evidence), false)
+  assert.equal(canOfferCorrection('refuted', '   ', evidence), false)
+  assert.equal(canOfferCorrection('refuted', 'Corrected statement.', [evidence[0]]), false)
+  assert.equal(canOfferCorrection('refuted', 'Corrected statement.', evidence.map((item) => ({
+    ...item,
+    source_type: 'web_search' as const,
+  }))), false)
+})
+
 test('analysis requests accept public HTTP URLs and reject malformed or credentialed URLs', () => {
-  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'https://example.com/article' }).success, true)
-  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'file:///etc/passwd' }).success, false)
-  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'not a valid url at all' }).success, false)
-  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'https://user:pass@example.com/story' }).success, false)
+  const conversation_id = 'b401c53b-41cc-449a-8d61-52235409cb24'
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'https://example.com/article', conversation_id }).success, true)
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'file:///etc/passwd', conversation_id }).success, false)
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'not a valid url at all', conversation_id }).success, false)
+  assert.equal(analysisSchema.safeParse({ type: 'url', content: 'https://user:pass@example.com/story', conversation_id }).success, false)
 })
 
 test('classifier service failures are non-fatal and valid signals are schema-checked', async () => {

@@ -8,9 +8,10 @@ import { z } from 'zod'
 import type { RowDataPacket } from 'mysql2'
 import { pool } from './db.js'
 import { extractArticle } from './article.js'
-import { analyzeContent } from './analyzer.js'
 import { analysisSchema } from './validation.js'
-import { classifierSignalSchema, fetchClassifierSignal } from './classifier.js'
+import { classifierSignalSchema } from './classifier.js'
+import { classifyDataset, datasetResultSchema } from './dataset.js'
+import { authRouter, requireAuth, type AuthenticatedRequest } from './auth.js'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3000)
@@ -29,11 +30,13 @@ const aiResultSchema = z.object({
     verdict: z.enum(['supported', 'refuted', 'mixed', 'unverifiable']),
     confidence: z.number().min(0).max(1),
     reasoning: z.string(),
+    correction: z.string().nullable(),
     evidence: z.array(z.object({
       title: z.string(),
       url: z.string().url(),
       snippet: z.string(),
       stance: z.enum(['supports', 'refutes', 'context']),
+      source_type: z.enum(['fact_check', 'official', 'trusted_press', 'web_search', 'encyclopedia']),
     })),
   })),
   source_assessment: z.object({ domain: z.string().nullable(), reputation: z.string() }),
@@ -42,29 +45,35 @@ const aiResultSchema = z.object({
 })
 
 type AnalysisJob = { analysisId: string }
-type SessionRequest = Request & { sessionId: string }
-
-function getSessionId(request: Request): string {
-  return (request as unknown as SessionRequest).sessionId
+function getUserId(request: Request): string {
+  return (request as AuthenticatedRequest).userId
 }
 
 app.use(cors({ origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173', exposedHeaders: ['X-Session-Id'] }))
 app.use(express.json({ limit: '110kb' }))
-app.use((request, response, next) => {
-  const suppliedId = request.header('x-session-id') ?? request.query.sessionId
-  const sessionId = typeof suppliedId === 'string' && /^[a-zA-Z0-9-]{16,128}$/.test(suppliedId)
-    ? suppliedId
-    : randomUUID()
-  ;(request as SessionRequest).sessionId = sessionId
-  response.setHeader('X-Session-Id', sessionId)
-  next()
-})
-app.use('/api', rateLimit({
+const sensitiveRequestLimit = rateLimit({
   windowMs: 60_000,
   limit: Number(process.env.RATE_LIMIT_PER_MIN ?? 10),
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-}))
+})
+app.use('/api/auth', sensitiveRequestLimit)
+app.use('/api/analyses', (request, response, next) => {
+  if (request.method === 'POST') return sensitiveRequestLimit(request, response, next)
+  next()
+})
+app.use('/api', (request, response, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+    const origin = request.get('origin')
+    const allowed = process.env.WEB_ORIGIN ?? 'http://localhost:5173'
+    if (origin && origin !== allowed) {
+      response.status(403).json({ error: 'Nguồn yêu cầu không được phép.' })
+      return
+    }
+  }
+  next()
+})
+app.use('/api/auth', authRouter)
 
 function sendProgress(analysisId: string, stage: string, message: string, progress: number) {
   progressEvents.emit(analysisId, { stage, message, progress })
@@ -86,12 +95,23 @@ async function processAnalysis(analysisId: string) {
       sourceUrl = extracted.url
     }
 
-    sendProgress(analysisId, 'evidence', 'Đang tìm bằng chứng và đối chiếu tuyên bố', 35)
-    const [analysisResult, styleSignal] = await Promise.all([
-      analyzeContent(content, sourceUrl),
-      fetchClassifierSignal(content, aiServiceUrl),
-    ])
-    const result = aiResultSchema.parse({ ...analysisResult, classifier_signal: styleSignal })
+    sendProgress(analysisId, 'evidence', 'Đang đối chiếu dữ liệu giả lập', 35)
+    const datasetResult = await classifyDataset(content, aiServiceUrl)
+    const match = datasetResult.match
+    const result = aiResultSchema.parse({
+      overall: {
+        credibility_score: match ? (datasetResult.label === 'real' ? 1 : 0)
+          : datasetResult.method === 'prediction' && datasetResult.classifier ? datasetResult.classifier.probabilities.real : 0.5,
+        label: datasetResult.label ? (datasetResult.label === 'real' ? 'likely_true' : 'likely_false') : 'insufficient_evidence',
+        summary: match ? 'Nhãn theo mẫu khớp trong dữ liệu huấn luyện giả lập.'
+          : datasetResult.method === 'prediction' ? 'Dự đoán từ classifier; chưa có mẫu khớp chính xác.'
+            : 'Chưa tìm được mẫu khớp đủ rõ để kết luận.',
+      },
+      claims: [],
+      classifier_signal: datasetResult.classifier,
+      source_assessment: { domain: null, reputation: 'Dữ liệu giả lập' },
+      disclaimer: '',
+    })
     sendProgress(analysisId, 'save', 'Đang lưu kết quả', 85)
 
     const connection = await pool.getConnection()
@@ -101,16 +121,29 @@ async function processAnalysis(analysisId: string) {
         'UPDATE analyses SET status = ?, overall_score = ?, label = ?, overall_summary = ?, url = ? WHERE id = ?',
         ['completed', result.overall.credibility_score, result.overall.label, result.overall.summary, sourceUrl, analysisId],
       )
+      await connection.execute(
+        'INSERT INTO dataset_results (analysis_id, result) VALUES (?, ?)',
+        [analysisId, JSON.stringify(datasetResult)],
+      )
       for (const claim of result.claims) {
         const claimId = randomUUID()
         await connection.execute(
-          'INSERT INTO claims (id, analysis_id, text, verdict, confidence, reasoning) VALUES (?, ?, ?, ?, ?, ?)',
-          [claimId, analysisId, claim.text, claim.verdict, claim.confidence, claim.reasoning],
+          'INSERT INTO claims (id, analysis_id, text, verdict, confidence, reasoning, correction) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [claimId, analysisId, claim.text, claim.verdict, claim.confidence, claim.reasoning, claim.correction],
         )
         for (const evidence of claim.evidence) {
           await connection.execute(
-            'INSERT INTO evidence (id, claim_id, title, url, snippet, stance, source_domain) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [randomUUID(), claimId, evidence.title, evidence.url, evidence.snippet, evidence.stance, new URL(evidence.url).hostname],
+            'INSERT INTO evidence (id, claim_id, title, url, snippet, stance, source_domain, source_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+              randomUUID(),
+              claimId,
+              evidence.title,
+              evidence.url,
+              evidence.snippet,
+              evidence.stance,
+              new URL(evidence.url).hostname,
+              evidence.source_type,
+            ],
           )
         }
       }
@@ -176,25 +209,32 @@ function dispatchAnalysis(analysisId: string) {
   }
 }
 
-async function getAnalysis(analysisId: string, sessionId: string) {
+async function getAnalysis(analysisId: string, userId: string) {
   const [analysisRows] = await pool.execute<RowDataPacket[]>(
-    'SELECT id, status, overall_score, label, overall_summary, url, input_type, created_at FROM analyses WHERE id = ? AND session_id = ?',
-    [analysisId, sessionId],
+    'SELECT a.id, a.status, a.overall_score, a.label, a.overall_summary, a.url, a.input_type, a.input_text, a.created_at FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?',
+    [analysisId, userId],
   )
   const analysis = analysisRows[0]
   if (!analysis) return null
 
   const [claimRows] = await pool.execute<RowDataPacket[]>(
-    'SELECT id, text, verdict, confidence, reasoning FROM claims WHERE analysis_id = ?',
+    'SELECT id, text, verdict, confidence, reasoning, correction FROM claims WHERE analysis_id = ?',
     [analysisId],
   )
   const claims = await Promise.all(claimRows.map(async (claim) => {
     const [evidenceRows] = await pool.execute<RowDataPacket[]>(
-      'SELECT title, url, snippet, stance FROM evidence WHERE claim_id = ?',
+      'SELECT title, url, snippet, stance, source_type FROM evidence WHERE claim_id = ?',
       [claim.id],
     )
     return { ...claim, evidence: evidenceRows }
   }))
+  const [datasetRows] = await pool.execute<RowDataPacket[]>(
+    'SELECT result FROM dataset_results WHERE analysis_id = ?', [analysisId],
+  )
+  const datasetResult = datasetRows[0]
+    ? datasetResultSchema.parse(typeof datasetRows[0].result === 'string'
+      ? JSON.parse(datasetRows[0].result) : datasetRows[0].result)
+    : null
   let styleSignal = null
   try {
     const [signalRows] = await pool.execute<RowDataPacket[]>(
@@ -226,9 +266,11 @@ async function getAnalysis(analysisId: string, sessionId: string) {
     },
     source_url: analysis.url,
     input_type: analysis.input_type,
+    input_content: analysis.input_text || analysis.url,
     created_at: analysis.created_at,
     claims,
     classifier_signal: styleSignal,
+    dataset_result: datasetResult,
     source_assessment: { domain: analysis.url ? new URL(String(analysis.url)).hostname : null, reputation: 'unknown' },
     disclaimer: 'AI-generated, may be wrong. Verify independently.',
   }
@@ -242,6 +284,93 @@ app.get('/health', (_request, response) => {
   })
 })
 
+app.use('/api', requireAuth)
+
+app.get('/api/conversations', async (request, response) => {
+  try {
+    const [rows] = await pool.execute<RowDataPacket[]>(
+      'SELECT id, title, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC, id DESC',
+      [getUserId(request)],
+    )
+    response.json({ conversations: rows })
+  } catch (error) {
+    console.error('Loading conversations failed:', error instanceof Error ? error.message : error)
+    response.status(503).json({ error: 'Không thể tải cuộc trò chuyện.' })
+  }
+})
+
+app.post('/api/conversations', async (request, response) => {
+  try {
+    const id = randomUUID()
+    await pool.execute(
+      'INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)',
+      [id, getUserId(request), 'Cuộc trò chuyện mới'],
+    )
+    response.status(201).json({ id, title: 'Cuộc trò chuyện mới' })
+  } catch (error) {
+    console.error('Creating conversation failed:', error instanceof Error ? error.message : error)
+    response.status(503).json({ error: 'Không thể tạo cuộc trò chuyện.' })
+  }
+})
+
+app.post('/api/conversations/import-legacy', async (request, response) => {
+  const parsed = z.object({ browser_id: z.string().regex(/^[a-zA-Z0-9-]{16,128}$/) }).safeParse(request.body)
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Mã lịch sử cũ không hợp lệ.' })
+    return
+  }
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.execute<RowDataPacket[]>(
+      'SELECT id, input_type, input_text, url FROM analyses WHERE session_id = ? AND conversation_id IS NULL FOR UPDATE',
+      [parsed.data.browser_id],
+    )
+    for (const row of rows) {
+      const conversationId = randomUUID()
+      const content = String(row.input_text || row.url || '')
+      await connection.execute(
+        'INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)',
+        [conversationId, getUserId(request), content.slice(0, 180) || 'Phân tích cũ'],
+      )
+      await connection.execute(
+        'UPDATE analyses SET conversation_id = ? WHERE id = ? AND conversation_id IS NULL',
+        [conversationId, row.id],
+      )
+    }
+    await connection.commit()
+    response.json({ imported: rows.length })
+  } catch (error) {
+    await connection.rollback()
+    console.error('Importing history failed:', error instanceof Error ? error.message : error)
+    response.status(503).json({ error: 'Không thể chuyển lịch sử cũ.' })
+  } finally {
+    connection.release()
+  }
+})
+
+app.get('/api/conversations/:id', async (request, response) => {
+  try {
+    const [conversation] = await pool.execute<RowDataPacket[]>(
+      'SELECT id, title FROM conversations WHERE id = ? AND user_id = ?',
+      [request.params.id, getUserId(request)],
+    )
+    if (!conversation[0]) {
+      response.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện.' })
+      return
+    }
+    const [rows] = await pool.execute<RowDataPacket[]>(
+      'SELECT id FROM analyses WHERE conversation_id = ? ORDER BY turn_order ASC',
+      [request.params.id],
+    )
+    const analyses = await Promise.all(rows.map((row) => getAnalysis(String(row.id), getUserId(request))))
+    response.json({ conversation: conversation[0], analyses })
+  } catch (error) {
+    console.error('Loading conversation failed:', error instanceof Error ? error.message : error)
+    response.status(503).json({ error: 'Không thể tải cuộc trò chuyện.' })
+  }
+})
+
 app.post('/api/analyses', async (request, response) => {
   const parsed = analysisSchema.safeParse(request.body)
   if (!parsed.success) {
@@ -249,22 +378,25 @@ app.post('/api/analyses', async (request, response) => {
     return
   }
 
-  const sessionId = getSessionId(request)
-  const { type, content } = parsed.data
+  const { type, content, conversation_id: conversationId } = parsed.data
   const contentHash = createHash('sha256').update(`${type}:${content}`).digest('hex')
   try {
-    const [cachedRows] = await pool.execute<RowDataPacket[]>(
-      'SELECT id FROM analyses WHERE session_id = ? AND content_hash = ? AND status = ? LIMIT 1',
-      [sessionId, contentHash, 'completed'],
+    const [owned] = await pool.execute<RowDataPacket[]>(
+      'SELECT id FROM conversations WHERE id = ? AND user_id = ?',
+      [conversationId, getUserId(request)],
     )
-    if (cachedRows[0]) {
-      response.json({ id: cachedRows[0].id, status: 'completed', cached: true })
+    if (!owned[0]) {
+      response.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện.' })
       return
     }
     const analysisId = randomUUID()
     await pool.execute(
-      'INSERT INTO analyses (id, session_id, input_type, input_text, url, content_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [analysisId, sessionId, type, type === 'text' ? content : '', type === 'url' ? content : null, contentHash, 'pending'],
+      'INSERT INTO analyses (id, session_id, conversation_id, input_type, input_text, url, content_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [analysisId, getUserId(request), conversationId, type, content, type === 'url' ? content : null, contentHash, 'pending'],
+    )
+    await pool.execute(
+      "UPDATE conversations SET title = IF(title = 'Cuộc trò chuyện mới', ?, title), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+      [content.slice(0, 180), conversationId, getUserId(request)],
     )
     response.status(202).json({ id: analysisId, status: 'pending' })
     dispatchAnalysis(analysisId)
@@ -276,8 +408,8 @@ app.post('/api/analyses', async (request, response) => {
 app.get('/api/analyses', async (request, response) => {
   try {
     const [rows] = await pool.execute<RowDataPacket[]>(
-      'SELECT id, status, overall_score, label, input_type, url, created_at FROM analyses WHERE session_id = ? ORDER BY created_at DESC LIMIT 50',
-      [(request as SessionRequest).sessionId],
+      'SELECT a.id, a.status, a.overall_score, a.label, a.input_type, a.url, a.created_at FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE c.user_id = ? ORDER BY a.created_at DESC LIMIT 50',
+      [getUserId(request)],
     )
     response.json({ analyses: rows })
   } catch {
@@ -287,7 +419,7 @@ app.get('/api/analyses', async (request, response) => {
 
 app.get('/api/analyses/:id', async (request, response) => {
   try {
-    const result = await getAnalysis(request.params.id, getSessionId(request))
+    const result = await getAnalysis(request.params.id, getUserId(request))
     if (!result) {
       response.status(404).json({ error: 'Không tìm thấy phân tích.' })
       return
@@ -299,12 +431,12 @@ app.get('/api/analyses/:id', async (request, response) => {
 })
 
 app.get('/api/analyses/:id/stream', async (request, response) => {
-  const sessionId = getSessionId(request)
+  const userId = getUserId(request)
   let rows: RowDataPacket[]
   try {
     ;[rows] = await pool.execute<RowDataPacket[]>(
-      'SELECT id, status FROM analyses WHERE id = ? AND session_id = ?',
-      [request.params.id, sessionId],
+      'SELECT a.id, a.status FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?',
+      [request.params.id, userId],
     )
   } catch {
     response.status(503).end()
@@ -337,8 +469,8 @@ app.get('/api/analyses/:id/stream', async (request, response) => {
   const heartbeat = setInterval(() => {
     response.write(': keep-alive\n\n')
     void pool.execute<RowDataPacket[]>(
-      'SELECT status FROM analyses WHERE id = ? AND session_id = ?',
-      [analysisId, sessionId],
+      'SELECT a.status FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?',
+      [analysisId, userId],
     ).then(([currentRows]) => {
       const status = String(currentRows[0]?.status ?? '')
       if (status === 'completed' || status === 'failed') onProgress({ stage: status, progress: 100 })
@@ -358,8 +490,8 @@ app.post('/api/analyses/:id/feedback', async (request, response) => {
   }
   try {
     const [rows] = await pool.execute<RowDataPacket[]>(
-      'SELECT id FROM analyses WHERE id = ? AND session_id = ?',
-      [request.params.id, getSessionId(request)],
+      'SELECT a.id FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?',
+      [request.params.id, getUserId(request)],
     )
     if (!rows[0]) {
       response.status(404).json({ error: 'Không tìm thấy phân tích.' })

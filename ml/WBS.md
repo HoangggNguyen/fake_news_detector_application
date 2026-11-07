@@ -4,13 +4,13 @@ Status legend: `Done` means implemented and verified; `Blocked` means waiting on
 
 | WBS | Work package | Status | Evidence / next action |
 |---|---|---|---|
-| 1.0 | Dataset intake | Done (user-provided) | `apps/ai-service/vfnd_dataset_1000` was supplied locally. Its README calls it VFND-Mini; provenance/labeling was not independently verified. Raw folder and ZIP are git-ignored. |
-| 2.0 | Schema, normalization, deduplication | Done | Loader accepts `text,label` and optional `title`, combines title+body, ignores `domain`, normalizes NFC/URLs/numbers, and removes invalid, duplicate, or conflicting rows. Train: 700 rows -> 80 unique texts; labels among unique texts are 60 real / 20 fake. |
-| 3.0 | EDA report | Done (provided split) | `ml/artifacts/cleaned.csv`, `eda.json`, and `eda.png` generated; title+body train text spans 102-120 words (median 107). |
-| 4.0 | Model comparison and validation | Done (prototype only) | Four models evaluated. All scored 100% CV and 100% on a 16-sample internal holdout after deduplication; the tiny/repetitive dataset makes this non-generalizable. |
-| 5.0 | Acceptance target and independent test | Blocked | Although internal metrics exceed 85%, val/test share all 80 normalized texts with train. No independent examples remain after overlap removal; do not claim the target as validated. |
-| 6.0 | Model serialization | Done (prototype) | `ml/artifacts/classifier.joblib` generated (260,637 bytes), plus comparison and training reports; all artifacts are git-ignored. |
-| 7.0 | FastAPI inference | Done | Model is loaded and `/predict` returns probabilities. Inputs shorter than the minimum training length (102 words after title+body) abstain with HTTP 422. |
+| 1.0 | Dataset intake | Done (user-provided) | `vfnd_dataset_1000` (README: VFND-Mini) and `vfnd_dataset_deduplicated` were supplied locally. Source and labeling for both are not independently verified. The new set has 20 rows (10 real / 10 fake); its train split has 14 rows (7 per label). Dataset folders and ZIPs are git-ignored. |
+| 2.0 | Schema, normalization, deduplication | Done | Loader accepts `text,label` and optional `title`, combines title+body, ignores `domain`, normalizes NFC/URLs/numbers, and removes invalid, duplicate, or conflicting rows across every training input. Existing train contributes 80 unique texts (60 real / 20 fake); new train adds 14 non-overlapping texts (7 real / 7 fake); combined training set: 94 texts (67 real / 27 fake). |
+| 3.0 | EDA report | Done (provided splits) | `ml/artifacts/cleaned.csv`, `eda.json`, and `eda.png` regenerated from the combined 94-row training set. |
+| 4.0 | Model comparison and validation | Done (prototype only) | Four models evaluated. The internal CV/19-sample holdout scored up to 100%; the new validation and test splits each scored 100% on only 3 examples. These tiny, unverified samples do not establish generalization. |
+| 5.0 | Acceptance target and independent test | Blocked | The 3-row validation and 3-row test scores are too small and their provenance/labels are unverified. Do not claim real-world accuracy or acceptance-target validation; obtain a larger authorized, provenance-verified, non-overlapping test set. |
+| 6.0 | Model serialization | Done (prototype) | `ml/artifacts/classifier.joblib` regenerated from the combined training inputs, alongside comparison, EDA, and training reports; artifacts are git-ignored. |
+| 7.0 | FastAPI inference | Done | The regenerated artifact supports `/predict` probabilities and abstains for inputs shorter than its minimum training length (55 words). FastAPI is not currently reachable; start it or restart an existing process to load this artifact. |
 | 8.0 | Express/UI optional-signal integration | Done | Live Express -> FastAPI persistence tested. Short-input test continued through Groq and returned `classifier_signal: null`; classifier never alters credibility score. |
 | 9.0 | Independent model validation | Blocked | Requires a non-overlapping, provenance-verified dataset. Obtain one before claiming real-world performance or using the 85% target in project conclusions. |
 

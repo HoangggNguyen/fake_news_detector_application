@@ -92,6 +92,31 @@ def load_labeled_csv(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
     return frame, diagnostics
 
 
+def combine_labeled_frames(
+    frames: list[pd.DataFrame],
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    if not frames:
+        raise ValueError("Cần ít nhất một tập dữ liệu huấn luyện.")
+
+    combined = pd.concat(frames, ignore_index=True)
+    label_counts = combined.groupby("text")["label"].nunique()
+    conflicting_texts = set(label_counts[label_counts > 1].index)
+    conflict_rows = int(combined["text"].isin(conflicting_texts).sum())
+    combined = combined.loc[~combined["text"].isin(conflicting_texts)]
+
+    before_deduplication = len(combined)
+    combined = combined.drop_duplicates(subset="text", keep="first").reset_index(drop=True)
+    diagnostics = {
+        "input_rows": sum(len(frame) for frame in frames),
+        "conflicting_rows_removed": conflict_rows,
+        "duplicate_rows_removed": before_deduplication - len(combined),
+        "clean_rows": len(combined),
+    }
+    if combined["label"].nunique() != 2:
+        raise ValueError("Sau khi gộp cần còn đủ hai nhãn thật (0) và giả (1).")
+    return combined, diagnostics
+
+
 def build_features() -> FeatureUnion:
     return FeatureUnion([
         (
