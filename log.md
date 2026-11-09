@@ -241,3 +241,9 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - Val table: 0.60 → 24 concluded / 87.5%; 0.65 → 21 / 85.7%; 0.70 → 12 / 91.7%; 0.75 → 5 / 100%; ≥ 0.80 → 0. Selected 0.70.
 - Test scored once at 0.70: 11/33 concluded, 10 correct (90.9%); 22 unresolved. TestClient through `/dataset/classify` reproduced 10 correct, 1 wrong, 22 unresolved. Report in `ml/artifacts/threshold_report.json`.
 - Python tests: 26 passed (4 new). Re-run `app.tune_threshold` after every retraining.
+
+## 2026-11-09 - Live provider check, model names and LLM retries
+
+- With all provider keys configured, Gemini and Groq returned HTTP 404: `gemini-2.5-flash` is no longer available to new users and `llama-3.3-70b-versatile` was removed. Listed the models available to the configured keys and switched defaults (code and `.env.example`) to `gemini-3.5-flash` and `openai/gpt-oss-120b`. Tavily and Google Fact Check returned HTTP 200.
+- Gemini also returned transient HTTP 503 (high demand). Added `withRetry` (up to 3 attempts on 429/5xx/timeout, 2s × attempt backoff) and a 60s timeout for LLM calls; search calls keep 12s. API tests: 17 passed (1 new).
+- Live end-to-end check with a temporary account (removed afterwards): a real-labelled VFND test article unresolved by the classifier went to the evidence layer; 8 claims extracted, 5 supported with Tuoi Tre/Thanh Nien/other sources, 2 unverifiable, 1 refuted (possibly an LLM misreading); overall "likely_true", matching the dataset label. Took 78s including retries.

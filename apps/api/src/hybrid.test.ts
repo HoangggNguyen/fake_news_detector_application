@@ -55,3 +55,21 @@ test('evidence failures are reported and do not fail the analysis', async () => 
   assert.equal(ok.check.status, 'ready')
   assert.equal(ok.evidence?.overall.label, 'mixed')
 })
+
+test('LLM calls retry on overload but not on client errors', async () => {
+  const { withRetry, HttpStatusError } = await import('./analyzer.js')
+  const noWait = { sleep: async () => undefined }
+  let calls = 0
+  assert.equal(await withRetry(async () => {
+    calls++
+    if (calls < 3) throw new HttpStatusError(503, 'overloaded')
+    return 'ok'
+  }, noWait), 'ok')
+  assert.equal(calls, 3)
+  calls = 0
+  await assert.rejects(withRetry(async () => { calls++; throw new HttpStatusError(404, 'missing model') }, noWait), /missing model/)
+  assert.equal(calls, 1)
+  calls = 0
+  await assert.rejects(withRetry(async () => { calls++; throw new HttpStatusError(429, 'rate limited') }, noWait), /rate limited/)
+  assert.equal(calls, 3)
+})
