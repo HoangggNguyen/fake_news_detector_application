@@ -39,12 +39,24 @@ function displayTitle(title: string): string {
   return title.replace(/\s*\((?:Mẫu|Cập nhật đợt|Cảnh báo mẫu)\s*#\d+\)\s*$/i, '').trim()
 }
 
+/** Rút gọn văn bản dài (bài báo dán vào) để không chiếm hết màn hình, có nút xem thêm. */
+function ExpandableText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 420
+  return <>
+    <p className={long && !open ? 'clamped-text' : undefined}>{text}</p>
+    {long && <button type="button" className="text-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      {open ? 'Thu gọn' : 'Xem thêm'}
+    </button>}
+  </>
+}
+
 function SampleContent({ sample }: { sample: DatasetSample }) {
   const sourceUrl = sample.source_url
   const safeUrl = sourceUrl && /^https?:\/\//i.test(sourceUrl) ? sourceUrl : null
   return <>
     {!safeUrl && <p>Nội dung và nguồn do dữ liệu cung cấp, chưa được kiểm chứng.</p>}
-    <p>{sample.text}</p>
+    <ExpandableText text={sample.text} />
     <p>Nguồn: {safeUrl
       ? <a href={safeUrl} target="_blank" rel="noopener noreferrer">{sample.source} ↗</a>
       : <>{sample.source} (chưa xác minh)</>}</p>
@@ -336,7 +348,7 @@ export default function App() {
         </nav>
       </header>
 
-      <section className="workspace" aria-labelledby="page-title">
+      <section className={`workspace ${view === 'compose' ? 'workspace-compose' : ''}`} aria-labelledby="page-title">
         {view === 'compose' && <>
           <div className="intro welcome-block">
             <p className="eyebrow">NEWSROOM / LAB</p>
@@ -352,7 +364,7 @@ export default function App() {
 
         {(view === 'result' || view === 'progress') && <div className="chat-transcript">
         {results.map((result) => <section key={result.id} className="result-view" aria-label="Lượt hội thoại">
-          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><p>{result.input_content || 'Nội dung đã gửi để phân tích'}</p></div></article>
+          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><ExpandableText text={result.input_content || 'Nội dung đã gửi để phân tích'} /></div></article>
           <article className="chat-message assistant-message"><span className="message-avatar assistant-avatar">N.</span><div className="message-body result-message-body">
           {result.status === 'completed' && result.overall ? <>
           {result.dataset_result ? <>
@@ -390,7 +402,7 @@ export default function App() {
         </section>)}
 
         {view === 'progress' && <section className="state-panel" aria-live="polite">
-          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><p>{submittedContent}</p></div></article>
+          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><ExpandableText text={submittedContent} /></div></article>
           <article className="chat-message assistant-message"><span className="message-avatar assistant-avatar">N.</span><div className="message-body">
             <p className="message-kicker">ĐANG KIỂM CHỨNG · {progress.progress}%</p><p>{progress.message}</p>
             <progress className="progress-bar" max="100" value={progress.progress} />
@@ -442,7 +454,12 @@ export default function App() {
             />
           )}
           <div className="form-footer">
-            <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp dữ liệu có thể được gửi tới LLM và dịch vụ tìm kiếm để đối chiếu bằng chứng.</span>
+            <span className="composer-meta">
+              {mode === 'text'
+                ? <><span>{content.length.toLocaleString('vi-VN')} / 100.000 ký tự</span><span className="composer-keys"> · Enter gửi · Alt+Enter xuống dòng</span></>
+                : <span>Chỉ hỗ trợ bài viết HTTP(S) công khai</span>}
+              <span className="composer-privacy">Nội dung chưa khớp dữ liệu có thể được gửi tới LLM và dịch vụ tìm kiếm để đối chiếu bằng chứng.</span>
+            </span>
             <button className="submit-button" type="submit" disabled={busy || (view === 'progress' && !error) || content.trim().length < 10}>
               {busy ? 'Đang gửi...' : 'Phân tích'} <span aria-hidden="true">↗</span>
             </button>

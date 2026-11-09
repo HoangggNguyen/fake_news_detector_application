@@ -247,3 +247,12 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - With all provider keys configured, Gemini and Groq returned HTTP 404: `gemini-2.5-flash` is no longer available to new users and `llama-3.3-70b-versatile` was removed. Listed the models available to the configured keys and switched defaults (code and `.env.example`) to `gemini-3.5-flash` and `openai/gpt-oss-120b`. Tavily and Google Fact Check returned HTTP 200.
 - Gemini also returned transient HTTP 503 (high demand). Added `withRetry` (up to 3 attempts on 429/5xx/timeout, 2s × attempt backoff) and a 60s timeout for LLM calls; search calls keep 12s. API tests: 17 passed (1 new).
 - Live end-to-end check with a temporary account (removed afterwards): a real-labelled VFND test article unresolved by the classifier went to the evidence layer; 8 claims extracted, 5 supported with Tuoi Tre/Thanh Nien/other sources, 2 unverifiable, 1 refuted (possibly an LLM misreading); overall "likely_true", matching the dataset label. Took 78s including retries.
+
+## 2026-11-09 - Responsive layout and auth rate-limit fix
+
+- Captured the app with headless Chrome (DevTools protocol) at 375×667, 390×844, 844×390, 768×1024, 1024×768, 1342×470, 1366×768 and 1920×1080, in compose and conversation views, using a temporary account (removed afterwards).
+- Fixed: compose view never received the `workspace-compose` class (welcome text left-aligned); `.page-shell` `min-height: 560px` pushed the composer off-screen on short viewports; submit button wrapped; long pasted articles filled the screen.
+- Sidebar becomes a drawer at ≤ 900px (iPad portrait, landscape phones). Short viewports (≤ 560px height) compact the top bar, hide the footer and shrink the composer. Touch devices get 16px inputs (no iOS zoom) and hide keyboard hints; safe-area insets added (`viewport-fit=cover`). Wider column at ≥ 1600px; compose view centred on desktop. Long user messages and dataset samples collapse to 6 lines with "Xem thêm".
+- After the changes: composer and submit visible, no horizontal overflow, document height equals the viewport at all eight sizes.
+- API: the auth rate limiter (10/min) also applied to `GET /api/auth/me`, so reloading the page more than ~10 times a minute showed the login screen with a JSON parse error. It now applies only to POST requests.
+- `pnpm build` passed; API tests: 17 passed.

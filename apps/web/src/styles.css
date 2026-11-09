@@ -149,8 +149,8 @@ body { color: var(--ink); background: #faf9f6; }
   grid-template-columns: 258px minmax(0, 1fr);
   grid-template-rows: 58px minmax(0, 1fr) 38px;
   width: 100%;
+  height: 100vh;
   height: 100dvh;
-  min-height: 560px;
   overflow: hidden;
   background: #faf9f6;
   background-image: none;
@@ -326,7 +326,8 @@ body { color: var(--ink); background: #faf9f6; }
 .history-list button:hover { background: #f0f2ed; }
 .sidebar-scrim { display: none; }
 
-@media (max-width: 760px) {
+/* Điện thoại, iPad dọc, điện thoại xoay ngang: sidebar thành ngăn kéo */
+@media (max-width: 900px) {
   .page-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 54px minmax(0, 1fr) 34px; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: min(290px, 84vw); transform: translateX(-102%); transition: transform .22s ease; box-shadow: 10px 0 32px #25332812; }
   .sidebar-visible .sidebar { transform: translateX(0); }
@@ -360,8 +361,87 @@ body { color: var(--ink); background: #faf9f6; }
   .history-list time { grid-column: 1 / -1; }
 }
 
-@media (max-height: 680px) and (min-width: 761px) {
+@media (max-height: 680px) and (min-width: 901px) {
   .workspace { padding-top: 8px; }
   .welcome-block h1 { font-size: 32px; }
   .welcome-block .intro-copy { margin-top: 6px; }
+}
+
+/* ===== Responsive bổ sung ===== */
+.auth-card h1 { font-family: 'Nunito Sans', sans-serif; font-size: clamp(30px, 7vw, 40px); font-weight: 700; }
+.submit-button { flex-shrink: 0; white-space: nowrap; }
+.form-footer { align-items: flex-end; }
+.composer-meta { min-width: 0; line-height: 1.5; }
+.composer-privacy::before { content: " · "; }
+.clamped-text { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; }
+.text-toggle { margin: 2px 0 0; border: 0; padding: 4px 0; color: #426c5b; background: transparent; font-size: 12px; font-weight: 700; }
+.text-toggle:hover { text-decoration: underline; }
+.correction-panel .text-toggle { font-size: 11px; }
+.sidebar { overflow-y: auto; }
+.sidebar-history { flex-shrink: 0; max-height: 45vh; }
+
+/* Màn hình lớn (PC, màn rộng): nới cột nội dung */
+@media (min-width: 1600px) {
+  .page-shell { grid-template-columns: 280px minmax(0, 1fr); }
+  .chat-transcript, .analysis-form, .history-view, .state-panel { width: min(100%, 880px); }
+  .welcome-block h1 { font-size: 44px; }
+}
+
+/* Thiết bị cảm ứng: chữ ô nhập >= 16px để iOS không tự phóng to, vùng chạm lớn hơn */
+@media (pointer: coarse) {
+  .analysis-form textarea, .analysis-form input[type="url"], .auth-card input { font-size: 16px; }
+  .composer-keys { display: none; }
+  .mode-switch button { min-height: 36px; }
+  .sidebar-history > button { min-height: 40px; }
+}
+
+/* Tai thỏ / thanh home của iPhone */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .topbar { padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
+  .site-footer { padding-bottom: env(safe-area-inset-bottom); }
+  .sidebar { padding-top: max(20px, env(safe-area-inset-top)); padding-bottom: max(14px, env(safe-area-inset-bottom)); padding-left: max(14px, env(safe-area-inset-left)); }
+}
+
+@media (max-width: 900px) {
+  .analysis-form { width: 100%; }
+  .form-footer { flex-wrap: nowrap; }
+  .composer-privacy { display: block; }
+  .composer-privacy::before { content: none; }
+}
+
+@media (max-width: 480px) {
+  .welcome-block h1 { font-size: 28px; }
+  .welcome-block .intro-copy { font-size: 13px; }
+  .composer-meta { font-size: 9.5px; }
+  .user-message .message-body { padding: 10px 12px; }
+  .correction-panel { padding: 11px 12px; }
+}
+
+/* Màn hình thấp (laptop nhỏ, điện thoại xoay ngang): thu gọn khung để luôn thấy ô nhập */
+@media (max-height: 560px) {
+  .page-shell { grid-template-rows: 46px minmax(0, 1fr) 0; }
+  .topbar { height: 46px; }
+  .site-footer { display: none; }
+  .workspace { padding-top: 4px; padding-bottom: 4px; }
+  .workspace-compose .intro { padding-top: 0; }
+  .welcome-block .eyebrow { display: none; }
+  .welcome-block h1 { font-size: 24px; }
+  .welcome-block .intro-copy { margin-top: 4px; font-size: 12px; }
+  .analysis-form { margin-bottom: 4px; padding: 7px 12px 7px; border-radius: 14px; }
+  .form-label { display: none; }
+  .form-topline { justify-content: flex-end; }
+  .analysis-form textarea { height: 44px; min-height: 38px; max-height: 26vh; margin: 2px 0; padding: 4px 3px; }
+  .mode-switch button { min-height: 28px; padding-top: 4px; padding-bottom: 4px; }
+  .analysis-form input[type="url"] { min-height: 36px; margin: 2px 0; padding: 4px 3px; }
+  .composer-privacy { display: none; }
+  .chat-transcript { padding-bottom: 8px; }
+  .chat-message { margin-bottom: 12px; }
+  .clamped-text { -webkit-line-clamp: 3; line-clamp: 3; }
+}
+
+/* Máy tính đủ cao: lời chào và ô nhập đứng cạnh nhau, căn giữa theo chiều dọc */
+@media (min-width: 901px) and (min-height: 681px) {
+  .workspace-compose { justify-content: center; }
+  .workspace-compose .intro { flex: 0 0 auto; padding: 0 0 28px; }
+  .workspace-compose .analysis-form { margin: 0 auto 6vh; }
 }
