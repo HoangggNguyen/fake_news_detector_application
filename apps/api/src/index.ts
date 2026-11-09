@@ -60,7 +60,11 @@ const sensitiveRequestLimit = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
 })
-app.use('/api/auth', sensitiveRequestLimit)
+// Chỉ giới hạn đăng nhập/đăng ký (POST); GET /api/auth/me chạy mỗi lần tải trang.
+app.use('/api/auth', (request, response, next) => {
+  if (request.method === 'POST') return sensitiveRequestLimit(request, response, next)
+  next()
+})
 app.use('/api/analyses', (request, response, next) => {
   if (request.method === 'POST') return sensitiveRequestLimit(request, response, next)
   next()
