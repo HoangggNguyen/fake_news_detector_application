@@ -51,6 +51,42 @@ function SampleContent({ sample }: { sample: DatasetSample }) {
   </>
 }
 
+function ClaimsList({ claims }: { claims: AnalysisResult['claims'] }) {
+  return <div className="claims-list">
+    {claims.map((claim, index) => <article className="claim-item" key={`${claim.text}-${index}`}>
+      <div className="claim-heading"><span className="claim-index">{String(index + 1).padStart(2, '0')}</span><span className={`verdict verdict-${claim.verdict}`}>{verdictLabels[claim.verdict] ?? claim.verdict}</span></div>
+      <h2>{claim.text}</h2>
+      <p>{claim.reasoning}</p>
+      {claim.verdict === 'refuted' && claim.correction && <aside className="correction-panel" aria-label="Thông tin đã chỉnh sửa theo nguồn">
+        <strong>Thông tin này có thể chưa chính xác. Có phải bạn muốn hỏi:</strong>
+        <p>{claim.correction}</p>
+      </aside>}
+      {claim.verdict === 'refuted' && !claim.correction && <p>Chưa đủ nguồn phù hợp để đề xuất thông tin đã chỉnh sửa.</p>}
+      {claim.evidence.length > 0 && <ul className="evidence-list">{claim.evidence.map((evidence) => <li key={evidence.url}>
+        <a href={evidence.url} target="_blank" rel="noreferrer">{evidence.title} <span aria-hidden="true">↗</span></a>
+        <span className="evidence-type">{evidenceTypeLabels[evidence.source_type] ?? 'Nguồn tham khảo'}</span>
+        <p>{evidence.snippet}</p>
+      </li>)}</ul>}
+    </article>)}
+  </div>
+}
+
+function EvidenceSection({ result }: { result: AnalysisResult }) {
+  const check = result.dataset_result?.evidence_check
+  if (!check || check.status === 'not_needed') return null
+  return <section className="evidence-section" aria-label="Đối chiếu bằng chứng web">
+    <p className="message-kicker">ĐỐI CHIẾU BẰNG CHỨNG WEB · THAM KHẢO</p>
+    {check.status === 'ready' && <>
+      <p>{result.claims.length
+        ? `${result.claims.length} tuyên bố được tách và đối chiếu với nguồn trên web.`
+        : 'Không tách được tuyên bố có thể kiểm chứng từ nội dung này.'}</p>
+      {result.claims.length > 0 && <ClaimsList claims={result.claims} />}
+      <p>Phần này do LLM tổng hợp từ kết quả tìm kiếm, có thể sai. Hãy mở và đọc nguồn gốc.</p>
+    </>}
+    {check.status !== 'ready' && <p>{check.message ?? 'Đối chiếu bằng chứng web hiện không khả dụng.'}</p>}
+  </section>
+}
+
 function getBrowserSessionId(): string {
   const existing = window.localStorage.getItem('newsroom-session-id')
   if (existing) return existing
@@ -309,7 +345,7 @@ export default function App() {
           </div>
           <div className="workflow" aria-label="Quy trình phân tích">
             <div><span>01</span><p>Đọc thông tin</p></div><b aria-hidden="true">/</b>
-            <div><span>02</span><p>Tìm nội dung liên quan</p></div><b aria-hidden="true">/</b>
+            <div><span>02</span><p>Đối chiếu dữ liệu &amp; bằng chứng web</p></div><b aria-hidden="true">/</b>
             <div><span>03</span><p>Đọc kết quả</p></div>
           </div>
         </>}
@@ -324,7 +360,9 @@ export default function App() {
             ? `Mình tìm thấy nội dung trùng khớp. Theo dữ liệu tham khảo, thông tin này được gắn nhãn ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}.`
             : result.dataset_result.method === 'prediction'
               ? `Mô hình dự đoán thông tin này nghiêng về ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}, nhưng mình chưa tìm thấy nội dung trùng khớp để đối chiếu.`
-              : 'Mình chưa tìm thấy nội dung đủ khớp để kết luận thông tin này là thật hay giả.'}</p>
+              : result.dataset_result.overall_basis === 'evidence'
+                ? `Mình chưa tìm thấy nội dung khớp trong dữ liệu tham khảo. Kết quả đối chiếu bằng chứng trên web (chỉ để tham khảo): ${resultLabels[result.overall.label] ?? result.overall.label}.`
+                : 'Mình chưa tìm thấy nội dung đủ khớp để kết luận thông tin này là thật hay giả.'}</p>
           {result.dataset_result.follow_up?.question && <p>{result.dataset_result.follow_up.question}</p>}
           {result.dataset_result.follow_up?.status === 'unavailable' && <p>Phần hỗ trợ diễn đạt hiện không khả dụng. Bạn có thể gửi thêm nội dung cụ thể để mình xem xét.</p>}
           {result.dataset_result.match && <section className="correction-panel" aria-label="Nội dung tham khảo">
@@ -340,27 +378,12 @@ export default function App() {
             </article>)}
           </section>}
           {!result.dataset_result.suggestions.length && <p>Mình chưa tìm thấy tin liên quan phù hợp để gợi ý thêm.</p>}
+          <EvidenceSection result={result} />
           </> : <>
           <p className="result-label">{resultLabels[result.overall.label] ?? result.overall.label}</p>
           <p className="result-summary">{result.overall.summary}</p>
           {result.source_assessment.domain && <p className="source-assessment">Nguồn bài viết: <strong>{result.source_assessment.domain}</strong> · Uy tín: {result.source_assessment.reputation}</p>}
-          <div className="claims-list">
-            {result.claims.map((claim, index) => <article className="claim-item" key={`${claim.text}-${index}`}>
-              <div className="claim-heading"><span className="claim-index">{String(index + 1).padStart(2, '0')}</span><span className={`verdict verdict-${claim.verdict}`}>{verdictLabels[claim.verdict] ?? claim.verdict}</span></div>
-              <h2>{claim.text}</h2>
-              <p>{claim.reasoning}</p>
-              {claim.verdict === 'refuted' && claim.correction && <aside className="correction-panel" aria-label="Thông tin đã chỉnh sửa theo nguồn">
-                <strong>Thông tin này có thể chưa chính xác. Có phải bạn muốn hỏi:</strong>
-                <p>{claim.correction}</p>
-              </aside>}
-              {claim.verdict === 'refuted' && !claim.correction && <p>Chưa đủ nguồn phù hợp để đề xuất thông tin đã chỉnh sửa.</p>}
-              {claim.evidence.length > 0 && <ul className="evidence-list">{claim.evidence.map((evidence) => <li key={evidence.url}>
-                <a href={evidence.url} target="_blank" rel="noreferrer">{evidence.title} <span aria-hidden="true">↗</span></a>
-                <span className="evidence-type">{evidenceTypeLabels[evidence.source_type] ?? 'Nguồn tham khảo'}</span>
-                <p>{evidence.snippet}</p>
-              </li>)}</ul>}
-            </article>)}
-          </div>
+          <ClaimsList claims={result.claims} />
           </>}
           </> : <p>{result.status === 'failed' ? 'Phân tích thất bại.' : 'Đang xử lý phân tích.'}</p>}
           </div></article>
@@ -419,7 +442,7 @@ export default function App() {
             />
           )}
           <div className="form-footer">
-            <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp có thể được gửi tới Groq để tạo câu hỏi.</span>
+            <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp dữ liệu có thể được gửi tới LLM và dịch vụ tìm kiếm để đối chiếu bằng chứng.</span>
             <button className="submit-button" type="submit" disabled={busy || (view === 'progress' && !error) || content.trim().length < 10}>
               {busy ? 'Đang gửi...' : 'Phân tích'} <span aria-hidden="true">↗</span>
             </button>

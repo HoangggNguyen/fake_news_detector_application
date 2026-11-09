@@ -97,6 +97,8 @@ input[type="url"] { min-height: 173px; padding-top: 12px; }
 .correction-panel { margin-top: 15px; padding: 13px 15px; border-left: 2px solid #426c5b; background: #e7eee4; }
 .correction-panel strong { color: #315f45; font-size: 12px; }
 .correction-panel p { margin: 6px 0 0; color: #46564b; font-size: 13px; line-height: 1.65; }
+.evidence-section { margin-top: 22px; padding-top: 16px; border-top: 1px dashed var(--line); }
+.evidence-section .claims-list { margin-top: 12px; }
 .evidence-list { margin: 15px 0 0; padding: 0; list-style: none; }
 .evidence-list li { padding: 12px 0; border-top: 1px solid #e8e9e2; }
 .evidence-list a { color: var(--green); font-size: 12px; font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
