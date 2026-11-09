@@ -65,6 +65,13 @@ export interface DatasetResult {
     question: string | null
     status: 'ready' | 'unavailable' | 'not_needed'
   }
+  /** Lớp 2: kết quả đối chiếu bằng chứng web bằng LLM (chỉ chạy khi không có mẫu khớp). */
+  evidence_check?: {
+    status: 'ready' | 'unavailable' | 'not_needed' | 'disabled'
+    message: string | null
+  }
+  /** Nguồn của nhãn tổng: mẫu khớp, classifier, bằng chứng web, hoặc chưa kết luận. */
+  overall_basis?: 'dataset' | 'classifier' | 'evidence' | 'none'
 }
 
 export interface AnalysisResult {

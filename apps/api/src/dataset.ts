@@ -17,6 +17,11 @@ export const datasetResultSchema = z.object({
     question: z.string().nullable(),
     status: z.enum(['ready', 'unavailable', 'not_needed']),
   }).optional(),
+  evidence_check: z.object({
+    status: z.enum(['ready', 'unavailable', 'not_needed', 'disabled']),
+    message: z.string().nullable(),
+  }).optional(),
+  overall_basis: z.enum(['dataset', 'classifier', 'evidence', 'none']).optional(),
 })
 
 export type DatasetResult = z.infer<typeof datasetResultSchema>

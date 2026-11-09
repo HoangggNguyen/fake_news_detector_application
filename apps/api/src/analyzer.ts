@@ -286,7 +286,7 @@ export function aggregateCredibility(claims: Pick<ClaimResult, 'verdict' | 'conf
     return total + value
   }, 0) / checkable.length
   const roundedScore = Number(score.toFixed(2))
-  const label = roundedScore >= 0.65 ? 'likely_true' : roundedScore <= 0.35 ? 'likely_false' : 'mixed'
+  const label: 'likely_true' | 'likely_false' | 'mixed' = roundedScore >= 0.65 ? 'likely_true' : roundedScore <= 0.35 ? 'likely_false' : 'mixed'
   return { credibility_score: roundedScore, label }
 }
 
