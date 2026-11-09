@@ -256,3 +256,10 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - After the changes: composer and submit visible, no horizontal overflow, document height equals the viewport at all eight sizes.
 - API: the auth rate limiter (10/min) also applied to `GET /api/auth/me`, so reloading the page more than ~10 times a minute showed the login screen with a JSON parse error. It now applies only to POST requests.
 - `pnpm build` passed; API tests: 17 passed.
+
+## 2026-11-10 - Type scale, no forced line breaks, account menu
+
+- Rewrote `apps/web/src/styles.css` as a single layer (356 lines, used classes only; colours and layout unchanged). All font sizes come from six fluid tokens: caption 12px, small 13–14px, body 15–16px, lead 16–18px, title 24–32px, display 26–44px. Measured on the rendered page at eight viewports: smallest visible text 12px, body text 15–16px.
+- Removed forced `<br />` from the welcome and history headings and the "TÀI KHOẢN NÀY" eyebrow; headings use `text-wrap: balance`. Welcome and history headings render on one line at all eight viewports. Fixed sidebar conversation titles being clipped without an ellipsis.
+- Replaced the sidebar footer with an account button (initial avatar, username, chevron) that opens a menu above it with "Chuyển lịch sử cũ" and "Đăng xuất"; closes on outside click, Escape or selection. No plan badge is shown because accounts have no plan; the username is shown because no display name is stored.
+- Verified with headless Chrome screenshots (temporary account removed afterwards). `pnpm --filter @fake-news/web build` passed.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AnalysisResult, DatasetSample } from '@fake-news/shared'
 
 type InputMode = 'text' | 'url'
@@ -49,6 +49,37 @@ function ExpandableText({ text }: { text: string }) {
       {open ? 'Thu gọn' : 'Xem thêm'}
     </button>}
   </>
+}
+
+/** Nút tài khoản ở chân sidebar; bấm để mở menu (chuyển lịch sử cũ, đăng xuất). */
+function AccountMenu({ username, onImport, onLogout }: { username: string; onImport: () => void; onLogout: () => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+  const choose = (action: () => void) => () => { setOpen(false); action() }
+  return <div className="account" ref={rootRef}>
+    {open && <div className="account-menu" role="menu" aria-label="Tài khoản">
+      <button type="button" role="menuitem" title="Gắn các phân tích cũ trên trình duyệt này vào tài khoản" onClick={choose(onImport)}>Chuyển lịch sử cũ</button>
+      <button type="button" role="menuitem" className="account-menu-danger" onClick={choose(onLogout)}>Đăng xuất</button>
+    </div>}
+    <button type="button" className="account-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className="account-avatar" aria-hidden="true">{username.charAt(0).toLocaleUpperCase('vi-VN')}</span>
+      <span className="account-name">{username}</span>
+      <svg className="account-chevron" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </button>
+  </div>
 }
 
 function SampleContent({ sample }: { sample: DatasetSample }) {
@@ -332,12 +363,7 @@ export default function App() {
         <button className={`sidebar-link ${view === 'history' ? 'sidebar-link-active' : ''}`} type="button" onClick={() => { void showHistory(); setSidebarOpen(false) }}>
           Xem tất cả
         </button>
-        <div className="sidebar-bottom">
-          <p>Đăng nhập: {user.username}</p>
-          <button type="button" onClick={() => void importHistory()}>Chuyển lịch sử cũ của trình duyệt này</button>
-          <button type="button" onClick={() => void logout()}>Đăng xuất</button>
-          <p>AI có thể sai. Luôn mở và kiểm tra nguồn gốc.</p>
-        </div>
+        <AccountMenu username={user.username} onImport={() => void importHistory()} onLogout={() => void logout()} />
       </aside>
       {sidebarOpen && <button className="sidebar-scrim" aria-label="Đóng thanh điều hướng" onClick={() => setSidebarOpen(false)} />}
       <header className="topbar">
@@ -352,7 +378,7 @@ export default function App() {
         {view === 'compose' && <>
           <div className="intro welcome-block">
             <p className="eyebrow">NEWSROOM / LAB</p>
-            <h1 id="page-title">Mình cùng<br /><em>kiểm chứng nhé.</em></h1>
+            <h1 id="page-title">Mình cùng <em>kiểm chứng nhé.</em></h1>
             <p className="intro-copy">Gửi một thông tin hoặc chủ đề, mình sẽ tìm nội dung liên quan để cùng bạn xem xét.</p>
           </div>
           <div className="workflow" aria-label="Quy trình phân tích">
@@ -413,7 +439,7 @@ export default function App() {
         </div>}
 
         {view === 'history' && <section className="history-view" aria-labelledby="page-title">
-          <p className="eyebrow">TÀI KHOẢN NÀY</p><h1 id="page-title">Lịch sử<br /><em>kiểm chứng.</em></h1>
+          <h1 id="page-title">Lịch sử <em>kiểm chứng</em></h1>
           {history.length ? <ul className="history-list">{history.map((item) => <li key={item.id}>
             <button type="button" onClick={() => void loadConversation(item.id).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Không tải được kết quả.'))}>
               <span className="history-type">{item.title}</span>
