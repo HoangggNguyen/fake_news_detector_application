@@ -226,3 +226,18 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - Added `apps/api/src/hybrid.ts` (`shouldCheckEvidence`, `runEvidenceCheck`, `combineResults`). Overall label priority: dataset match → classifier prediction → web evidence (marked as reference) → unresolved. Layer 2 errors are stored as `evidence_check` in `dataset_results.result` and shown in the UI; they do not fail the analysis. No database migration needed (JSON column).
 - UI shows dataset result first, then a "Đối chiếu bằng chứng web · tham khảo" section with claims, verdicts and source links. Shared types extended with `evidence_check` and `overall_basis`.
 - `pnpm build` passed; API tests: 16 passed (4 new hybrid tests). No live end-to-end run: the local `.env` has no LLM/Tavily/Fact Check keys, and the dataset folders and `ml/artifacts/classifier.joblib` are absent on this machine. Python tests not run (`pytest` missing from the venv).
+
+## 2026-11-09 - Original VFND dataset and retrained classifier
+
+- The three simulated folders (`vfnd_dataset_1000`, `_deduplicated`, `_10000_full`) are not in the public VFND repository and could not be restored. Cloned the original repository (commit d703bbe, GPL-3.0) into session scratch storage and added `ml/prepare_vfnd.py` to convert `CSV/vn_news_226_tlfr.csv` into `apps/ai-service/vfnd_original/{train,val,test}.csv` (225 unique rows, stratified 70/15/15, seed 42, no val/test overlap with train). LICENSE and SOURCE.txt copied alongside; folder added to `.gitignore`.
+- `apps/ai-service/app/main.py`: every dataset folder is now optional (`vfnd_original` first); the service errors only when none exist. Replaced the machine-dependent optional-dataset test with two hermetic tests.
+- Installed `ml/requirements.txt` into the venv. Python tests: 22 passed.
+- Trained `tfidf-vfnd-original-v4` on VFND train + finance (163 rows). Logistic Regression selected (CV 0.908 acc / 0.904 F1; holdout 0.909 / 0.909). Independent val 0.788 / 0.785, test 0.848 / 0.848 (33 rows each).
+- TestClient smoke check: health ready, 163 lookup samples, a train sample returns `match`. All 33 test samples return `unresolved` because no classifier confidence reaches the 0.9 threshold (max ≈ 0.8); the threshold was not changed.
+
+## 2026-11-09 - Decision threshold tuned on validation
+
+- Made the `/dataset/classify` threshold come from the artifact (`decision_threshold`, default 0.9 when absent). Added `app/tune_threshold.py` with a rule fixed before inspecting results: on val, choose the lowest threshold in 0.50–0.95 (step 0.05) with ≥ 5 concluded samples and ≥ 90% selective accuracy; otherwise keep 0.9.
+- Val table: 0.60 → 24 concluded / 87.5%; 0.65 → 21 / 85.7%; 0.70 → 12 / 91.7%; 0.75 → 5 / 100%; ≥ 0.80 → 0. Selected 0.70.
+- Test scored once at 0.70: 11/33 concluded, 10 correct (90.9%); 22 unresolved. TestClient through `/dataset/classify` reproduced 10 correct, 1 wrong, 22 unresolved. Report in `ml/artifacts/threshold_report.json`.
+- Python tests: 26 passed (4 new). Re-run `app.tune_threshold` after every retraining.
