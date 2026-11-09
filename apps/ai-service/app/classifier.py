@@ -43,7 +43,7 @@ URL_PATTERN = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)*")
 SPECIAL_PATTERN = re.compile(r"[^\w\s]", re.UNICODE)
 WHITESPACE_PATTERN = re.compile(r"\s+")
-MODEL_VERSION = "tfidf-baseline-v3"
+MODEL_VERSION = "tfidf-vfnd-original-v4"
 
 
 def normalize_text(value: Any) -> str:
