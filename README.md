@@ -8,7 +8,10 @@
 
 - Web: React, TypeScript, Vite, Tailwind CSS.
 - API: Node.js, Express, MySQL; Redis/BullMQ là tùy chọn.
-- FastAPI đối chiếu dữ liệu train cục bộ và phục vụ classifier TF-IDF. Khi không có mẫu khớp, API có thể gọi Groq để tạo một câu hỏi tiếp theo; Groq không quyết định nhãn và không tìm nguồn web.
+- Phân tích kết hợp hai lớp:
+  1. **Lớp chính – dữ liệu + TF-IDF (FastAPI):** tra mẫu khớp trong dữ liệu train cục bộ; nếu không khớp, classifier TF-IDF chỉ đưa nhãn khi đủ độ dài và độ tin cậy ≥ 0,9.
+  2. **Lớp tham khảo – LLM + bằng chứng web (API Node.js):** chỉ chạy khi lớp chính không có mẫu khớp. LLM (`LLM_PROVIDER`: Gemini/Groq/Ollama) tách tuyên bố, tìm bằng chứng qua Google Fact Check, Tavily và Wikipedia tiếng Việt, rồi đánh giá từng tuyên bố chỉ dựa trên nguồn tìm được.
+  Nhãn tổng ưu tiên mẫu khớp, sau đó tới dự đoán classifier; chỉ khi cả hai chưa kết luận mới dùng kết quả bằng chứng web (ghi rõ là tham khảo). Lỗi hoặc thiếu khóa ở lớp 2 không làm hỏng phân tích; giao diện hiển thị lý do. Tắt lớp 2 bằng `EVIDENCE_CHECK=false`. Groq vẫn có thể tạo một câu hỏi gợi ý cho nội dung không khớp.
 
 ## Yêu cầu
 
@@ -106,9 +109,9 @@ API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:800
 3. Nếu nội dung hoặc tiêu đề khớp mẫu train sau chuẩn hóa, xem nhãn và nguồn ghi trong mẫu giả lập. Nếu không khớp, classifier chỉ đưa dự đoán khi đủ độ dài và điểm tối thiểu 0,9; ngưỡng này là heuristic chưa hiệu chuẩn, không đảm bảo độ chính xác. Nếu chưa xác định, có thể xem tối đa ba mẫu gần giống; đây là gợi ý chứ không phải đính chính được xác minh. Mẫu trùng nhưng có nhãn trái nhau không được tự kết luận.
 4. Chọn một cuộc trò chuyện ở sidebar hoặc **Xem tất cả** để xem lại các lượt gửi và kết quả. Sau khi đăng nhập, nút **Chuyển lịch sử cũ của trình duyệt này** chủ động gắn các phân tích cũ vào tài khoản; mỗi phân tích cũ thành một cuộc trò chuyện riêng.
 
-Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, dùng chế độ văn bản và không cấu hình khóa Groq. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
+Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, dùng chế độ văn bản, đặt `EVIDENCE_CHECK=false` và không cấu hình khóa Groq. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
 
-Với nội dung không khớp, tối đa 4.000 ký tự đầu của nội dung (bao gồm nội dung trích từ URL) được gửi tới Groq nếu cấu hình khóa. Không gửi thông tin nhạy cảm. Câu hỏi do Groq tạo chỉ là gợi ý hội thoại; nhãn và nguồn được lấy từ kết quả cục bộ. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
+Với nội dung không khớp, tối đa 80.000 ký tự đầu (bao gồm nội dung trích từ URL) được gửi tới LLM để tách tuyên bố, các tuyên bố được gửi tới dịch vụ tìm kiếm đã cấu hình, và tối đa 4.000 ký tự được gửi tới Groq để tạo câu hỏi nếu có khóa. Không gửi thông tin nhạy cảm. Kết quả bằng chứng web là tham khảo, do LLM tổng hợp và có thể sai; nhãn từ mẫu khớp hoặc classifier luôn được ưu tiên. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
 
 ## Kiểm tra
 
@@ -131,6 +134,7 @@ pnpm --filter @fake-news/api test
 
 - `USE_BULLMQ=false`: chạy job trong tiến trình API, không cần Redis.
 - Đổi thành `USE_BULLMQ=true` để dùng BullMQ; khi đó Redis trong `REDIS_URL` phải sẵn sàng.
+- `EVIDENCE_CHECK=true` (mặc định): bật lớp đối chiếu bằng chứng web khi không có mẫu khớp; cần khóa của `LLM_PROVIDER` và nên có `TAVILY_API_KEY` và/hoặc `GOOGLE_FACTCHECK_API_KEY`. Đặt `false` để chỉ dùng dữ liệu + TF-IDF.
 - `RATE_LIMIT_PER_MIN`: số request tối đa mỗi phút cho các endpoint `/api`; mặc định là `10`.
 - `GEMINI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`: tên model được gửi tới provider tương ứng.
 - `PORT`: cổng API, mặc định `3000`.
@@ -201,7 +205,7 @@ AI service (chỉ có tín hiệu classifier khi đã train và nạp model):
 | `GET` | `/model/status` | Phiên bản model đang nạp |
 | `POST` | `/predict` | Nhãn, xác suất và feature giải thích nếu model hỗ trợ |
 
-Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/predict` trả `503`; API chính bỏ qua tín hiệu này, không đổi điểm credibility, và tiếp tục luồng phân tích Groq.
+Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/predict` trả `503`; `/dataset/classify` vẫn tra được mẫu khớp nhưng không có dự đoán classifier; khi không khớp, API chuyển sang lớp đối chiếu bằng chứng web.
 
 ## Xử lý lỗi thường gặp
 
@@ -213,4 +217,4 @@ Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/pred
 
 ## Ghi chú về các phần đang phát triển
 
-`apps/ai-service` hiện là FastAPI health stub; luồng phân tích đang gọi provider trực tiếp từ API Node.js. Classifier TF-IDF, embedding/vector search và triển khai production chưa được tích hợp. Tiến trình phát triển theo phiên được ghi trong [log.md](log.md); quy tắc tiếp tục ghi log nằm trong [spec.md](spec.md).
+Luồng kết hợp (dữ liệu + TF-IDF làm lớp chính, LLM + bằng chứng web làm lớp tham khảo) đã được tích hợp. Embedding/vector search và triển khai production chưa được tích hợp; chất lượng của lớp bằng chứng web chưa được đánh giá độc lập. Tiến trình phát triển theo phiên được ghi trong [log.md](log.md); quy tắc tiếp tục ghi log nằm trong [spec.md](spec.md).
