@@ -42,10 +42,37 @@ const verdictsSchema = z.object({
   overall_summary: z.string(),
 })
 
-async function responseJson<T>(url: string | URL, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(12_000) })
-  if (!response.ok) throw new Error(`Nguồn dữ liệu trả về HTTP ${response.status}.`)
+export class HttpStatusError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+  }
+}
+
+async function responseJson<T>(url: string | URL, init?: RequestInit, timeoutMs = 12_000): Promise<T> {
+  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+  if (!response.ok) throw new HttpStatusError(response.status, `Nguồn dữ liệu trả về HTTP ${response.status}.`)
   return await response.json() as T
+}
+
+const LLM_TIMEOUT_MS = 60_000
+
+/** Thử lại khi provider quá tải hoặc giới hạn tốc độ (429, 5xx) hay bị timeout. */
+export async function withRetry<T>(
+  run: () => Promise<T>,
+  { attempts = 3, baseDelayMs = 2_000, sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)) } = {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run()
+    } catch (error) {
+      const retryable = error instanceof HttpStatusError
+        ? error.status === 429 || error.status >= 500
+        : error instanceof Error && error.name === 'TimeoutError'
+      if (!retryable || attempt >= attempts) throw error
+      console.warn(`LLM request failed (${error instanceof Error ? error.message : error}); retry ${attempt}/${attempts - 1}`)
+      await sleep(baseDelayMs * attempt)
+    }
+  }
 }
 
 function readModelJson(text: string): unknown {
@@ -56,15 +83,23 @@ function readModelJson(text: string): unknown {
   return JSON.parse(cleaned.slice(start, end + 1)) as unknown
 }
 
+function llmJson<T>(url: string | URL, init?: RequestInit): Promise<T> {
+  return responseJson<T>(url, init, LLM_TIMEOUT_MS)
+}
+
 async function askModel(prompt: string): Promise<string> {
+  return withRetry(() => askModelOnce(prompt))
+}
+
+async function askModelOnce(prompt: string): Promise<string> {
   const provider = (process.env.LLM_PROVIDER ?? 'gemini').toLowerCase()
   if (provider === 'gemini') {
     const apiKey = process.env.GEMINI_API_KEY
     if (!apiKey) throw new Error('Thiếu GEMINI_API_KEY trong file .env.')
-    const model = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+    const model = process.env.GEMINI_MODEL ?? 'gemini-3.5-flash'
     const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`)
     url.searchParams.set('key', apiKey)
-    const result = await responseJson<{
+    const result = await llmJson<{
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
     }>(url, {
       method: 'POST',
@@ -79,13 +114,13 @@ async function askModel(prompt: string): Promise<string> {
   if (provider === 'groq') {
     const apiKey = process.env.GROQ_API_KEY
     if (!apiKey) throw new Error('Thiếu GROQ_API_KEY trong file .env.')
-    const result = await responseJson<{
+    const result = await llmJson<{
       choices?: Array<{ message?: { content?: string } }>
     }>('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+        model: process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b',
         temperature: 0.1,
         response_format: { type: 'json_object' },
         messages: [{ role: 'user', content: prompt }],
@@ -98,7 +133,7 @@ async function askModel(prompt: string): Promise<string> {
 
   if (provider === 'ollama') {
     const baseUrl = process.env.OLLAMA_URL ?? 'http://localhost:11434'
-    const result = await responseJson<{ message?: { content?: string } }>(
+    const result = await llmJson<{ message?: { content?: string } }>(
       new URL('/api/chat', baseUrl),
       {
         method: 'POST',
@@ -286,7 +321,7 @@ export function aggregateCredibility(claims: Pick<ClaimResult, 'verdict' | 'conf
     return total + value
   }, 0) / checkable.length
   const roundedScore = Number(score.toFixed(2))
-  const label = roundedScore >= 0.65 ? 'likely_true' : roundedScore <= 0.35 ? 'likely_false' : 'mixed'
+  const label: 'likely_true' | 'likely_false' | 'mixed' = roundedScore >= 0.65 ? 'likely_true' : roundedScore <= 0.35 ? 'likely_false' : 'mixed'
   return { credibility_score: roundedScore, label }
 }
 

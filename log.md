@@ -220,3 +220,46 @@ Append a dated entry for every coding session. Record commands and outcomes, cha
 - Preserved full article text but did not promote the new dataset's unverified `url` column to a verified source link. The UI identifies content and sources without linked provenance as unverified.
 - Re-trained `tfidf-baseline-v3` on 117 cleaned examples from all four datasets; Multinomial Naive Bayes was selected. Each older external validation/test set contains only three examples, so its metrics do not establish real-world accuracy. Previous artifacts were backed up in session storage.
 - AI tests: 21 passed; API tests: 12 passed; web build passed. FastAPI TestClient verified the final artifact, all 20 new records by original title, normalized title and body, and the four existing finance suggestions. No services were listening on ports 8000, 3000 or 5173 at the final check; no browser test was performed.
+## 2026-11-09 - Hybrid dataset + evidence analysis
+
+- Combined both analysis approaches. Layer 1 (primary): dataset lookup + TF-IDF classifier via AI service, unchanged. Layer 2 (reference): the existing LLM claim-extraction and web-evidence pipeline (`analyzeContent`) now runs when Layer 1 has no exact match; disable with `EVIDENCE_CHECK=false`.
+- Added `apps/api/src/hybrid.ts` (`shouldCheckEvidence`, `runEvidenceCheck`, `combineResults`). Overall label priority: dataset match → classifier prediction → web evidence (marked as reference) → unresolved. Layer 2 errors are stored as `evidence_check` in `dataset_results.result` and shown in the UI; they do not fail the analysis. No database migration needed (JSON column).
+- UI shows dataset result first, then a "Đối chiếu bằng chứng web · tham khảo" section with claims, verdicts and source links. Shared types extended with `evidence_check` and `overall_basis`.
+- `pnpm build` passed; API tests: 16 passed (4 new hybrid tests). No live end-to-end run: the local `.env` has no LLM/Tavily/Fact Check keys, and the dataset folders and `ml/artifacts/classifier.joblib` are absent on this machine. Python tests not run (`pytest` missing from the venv).
+
+## 2026-11-09 - Original VFND dataset and retrained classifier
+
+- The three simulated folders (`vfnd_dataset_1000`, `_deduplicated`, `_10000_full`) are not in the public VFND repository and could not be restored. Cloned the original repository (commit d703bbe, GPL-3.0) into session scratch storage and added `ml/prepare_vfnd.py` to convert `CSV/vn_news_226_tlfr.csv` into `apps/ai-service/vfnd_original/{train,val,test}.csv` (225 unique rows, stratified 70/15/15, seed 42, no val/test overlap with train). LICENSE and SOURCE.txt copied alongside; folder added to `.gitignore`.
+- `apps/ai-service/app/main.py`: every dataset folder is now optional (`vfnd_original` first); the service errors only when none exist. Replaced the machine-dependent optional-dataset test with two hermetic tests.
+- Installed `ml/requirements.txt` into the venv. Python tests: 22 passed.
+- Trained `tfidf-vfnd-original-v4` on VFND train + finance (163 rows). Logistic Regression selected (CV 0.908 acc / 0.904 F1; holdout 0.909 / 0.909). Independent val 0.788 / 0.785, test 0.848 / 0.848 (33 rows each).
+- TestClient smoke check: health ready, 163 lookup samples, a train sample returns `match`. All 33 test samples return `unresolved` because no classifier confidence reaches the 0.9 threshold (max ≈ 0.8); the threshold was not changed.
+
+## 2026-11-09 - Decision threshold tuned on validation
+
+- Made the `/dataset/classify` threshold come from the artifact (`decision_threshold`, default 0.9 when absent). Added `app/tune_threshold.py` with a rule fixed before inspecting results: on val, choose the lowest threshold in 0.50–0.95 (step 0.05) with ≥ 5 concluded samples and ≥ 90% selective accuracy; otherwise keep 0.9.
+- Val table: 0.60 → 24 concluded / 87.5%; 0.65 → 21 / 85.7%; 0.70 → 12 / 91.7%; 0.75 → 5 / 100%; ≥ 0.80 → 0. Selected 0.70.
+- Test scored once at 0.70: 11/33 concluded, 10 correct (90.9%); 22 unresolved. TestClient through `/dataset/classify` reproduced 10 correct, 1 wrong, 22 unresolved. Report in `ml/artifacts/threshold_report.json`.
+- Python tests: 26 passed (4 new). Re-run `app.tune_threshold` after every retraining.
+
+## 2026-11-09 - Live provider check, model names and LLM retries
+
+- With all provider keys configured, Gemini and Groq returned HTTP 404: `gemini-2.5-flash` is no longer available to new users and `llama-3.3-70b-versatile` was removed. Listed the models available to the configured keys and switched defaults (code and `.env.example`) to `gemini-3.5-flash` and `openai/gpt-oss-120b`. Tavily and Google Fact Check returned HTTP 200.
+- Gemini also returned transient HTTP 503 (high demand). Added `withRetry` (up to 3 attempts on 429/5xx/timeout, 2s × attempt backoff) and a 60s timeout for LLM calls; search calls keep 12s. API tests: 17 passed (1 new).
+- Live end-to-end check with a temporary account (removed afterwards): a real-labelled VFND test article unresolved by the classifier went to the evidence layer; 8 claims extracted, 5 supported with Tuoi Tre/Thanh Nien/other sources, 2 unverifiable, 1 refuted (possibly an LLM misreading); overall "likely_true", matching the dataset label. Took 78s including retries.
+
+## 2026-11-09 - Responsive layout and auth rate-limit fix
+
+- Captured the app with headless Chrome (DevTools protocol) at 375×667, 390×844, 844×390, 768×1024, 1024×768, 1342×470, 1366×768 and 1920×1080, in compose and conversation views, using a temporary account (removed afterwards).
+- Fixed: compose view never received the `workspace-compose` class (welcome text left-aligned); `.page-shell` `min-height: 560px` pushed the composer off-screen on short viewports; submit button wrapped; long pasted articles filled the screen.
+- Sidebar becomes a drawer at ≤ 900px (iPad portrait, landscape phones). Short viewports (≤ 560px height) compact the top bar, hide the footer and shrink the composer. Touch devices get 16px inputs (no iOS zoom) and hide keyboard hints; safe-area insets added (`viewport-fit=cover`). Wider column at ≥ 1600px; compose view centred on desktop. Long user messages and dataset samples collapse to 6 lines with "Xem thêm".
+- After the changes: composer and submit visible, no horizontal overflow, document height equals the viewport at all eight sizes.
+- API: the auth rate limiter (10/min) also applied to `GET /api/auth/me`, so reloading the page more than ~10 times a minute showed the login screen with a JSON parse error. It now applies only to POST requests.
+- `pnpm build` passed; API tests: 17 passed.
+
+## 2026-11-10 - Type scale, no forced line breaks, account menu
+
+- Rewrote `apps/web/src/styles.css` as a single layer (356 lines, used classes only; colours and layout unchanged). All font sizes come from six fluid tokens: caption 12px, small 13–14px, body 15–16px, lead 16–18px, title 24–32px, display 26–44px. Measured on the rendered page at eight viewports: smallest visible text 12px, body text 15–16px.
+- Removed forced `<br />` from the welcome and history headings and the "TÀI KHOẢN NÀY" eyebrow; headings use `text-wrap: balance`. Welcome and history headings render on one line at all eight viewports. Fixed sidebar conversation titles being clipped without an ellipsis.
+- Replaced the sidebar footer with an account button (initial avatar, username, chevron) that opens a menu above it with "Chuyển lịch sử cũ" and "Đăng xuất"; closes on outside click, Escape or selection. No plan badge is shown because accounts have no plan; the username is shown because no display name is stored.
+- Verified with headless Chrome screenshots (temporary account removed afterwards). `pnpm --filter @fake-news/web build` passed.

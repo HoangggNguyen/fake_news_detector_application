@@ -62,23 +62,20 @@ def test_predict_returns_probability_when_artifact_is_available(monkeypatch, tmp
     assert short_response.status_code == 422
 
 
-def test_missing_optional_dataset_keeps_existing_lookup(monkeypatch, tmp_path, caplog) -> None:
-    paths_seen = []
-    existing_is_file = Path.is_file
+def test_missing_optional_datasets_are_skipped_with_warning(tmp_path, caplog) -> None:
+    from app.main import resolve_dataset_paths
 
-    def is_file(path):
-        if path.parent.name == "vfnd_dataset_10000_full":
-            return False
-        return existing_is_file(path)
-
-    def create_lookup(paths):
-        paths_seen.extend(paths)
-        return object()
-
-    monkeypatch.setattr(Path, "is_file", is_file)
-    monkeypatch.setattr("app.main.DatasetLookup", create_lookup)
-    monkeypatch.setenv("MODEL_PATH", str(tmp_path / "not-trained.joblib"))
-    with caplog.at_level(logging.WARNING), TestClient(app):
-        assert app.state.dataset_lookup is not None
-    assert len(paths_seen) == 3
+    for name in ("vfnd_original", "finance_data"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "train.csv").write_text("id,title,text,domain,label\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        paths = resolve_dataset_paths(tmp_path)
+    assert [path.parent.name for path in paths] == ["vfnd_original", "finance_data"]
     assert "Optional training dataset is missing" in caplog.text
+
+
+def test_no_training_dataset_is_an_error(tmp_path) -> None:
+    from app.main import resolve_dataset_paths
+
+    with pytest.raises(ValueError):
+        resolve_dataset_paths(tmp_path)
