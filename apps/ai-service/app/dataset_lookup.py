@@ -14,6 +14,8 @@ from app.classifier import LABEL_MAP, predict_style
 logger = logging.getLogger(__name__)
 
 TITLE_SUFFIX = re.compile(r"\s*\((?:Mẫu|Cập nhật đợt|Cảnh báo mẫu)\s*#\d+\)\s*$", re.IGNORECASE)
+# Ngưỡng mặc định khi artifact chưa có decision_threshold (chọn bằng app.tune_threshold).
+DEFAULT_DECISION_THRESHOLD = 0.9
 TITLE_CATEGORY = re.compile(r"^\s*\[[^\]]+\]\s*")
 
 
@@ -93,6 +95,7 @@ class DatasetLookup:
         signal = None
         if artifact is not None and len(normalized.split()) >= int(artifact.get("min_training_words", 0)):
             signal = predict_style(artifact, text)
-        if not matches and signal is not None and signal["confidence"] >= 0.9:
+        threshold = float((artifact or {}).get("decision_threshold", DEFAULT_DECISION_THRESHOLD))
+        if not matches and signal is not None and signal["confidence"] >= threshold:
             return {"method": "prediction", "label": signal["label"], "match": None, "suggestions": suggestions, "classifier": signal}
         return {"method": "unresolved", "label": None, "match": None, "suggestions": suggestions, "classifier": signal}

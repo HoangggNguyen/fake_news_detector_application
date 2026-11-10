@@ -26,7 +26,7 @@ export async function makeFollowUp(
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       signal: AbortSignal.timeout(12_000),
       body: JSON.stringify({
-        model: options.model ?? process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+        model: options.model ?? process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b',
         temperature: 0.2,
         response_format: { type: 'json_object' },
         messages: [

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AnalysisResult, DatasetSample } from '@fake-news/shared'
 import { ApiError, apiRequest, errorMessage } from './api'
 import { composerProblem, MIN_CONTENT_LENGTH } from './composerValidation'
@@ -44,16 +44,95 @@ function displayTitle(title: string): string {
   return title.replace(/\s*\((?:Mẫu|Cập nhật đợt|Cảnh báo mẫu)\s*#\d+\)\s*$/i, '').trim()
 }
 
+/** Rút gọn văn bản dài (bài báo dán vào) để không chiếm hết màn hình, có nút xem thêm. */
+function ExpandableText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 420
+  return <>
+    <p className={long && !open ? 'clamped-text' : undefined}>{text}</p>
+    {long && <button type="button" className="text-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      {open ? 'Thu gọn' : 'Xem thêm'}
+    </button>}
+  </>
+}
+
+/** Nút tài khoản ở chân sidebar; bấm để mở menu (chuyển lịch sử cũ, đăng xuất). */
+function AccountMenu({ username, onImport, onLogout }: { username: string; onImport: () => void; onLogout: () => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+  const choose = (action: () => void) => () => { setOpen(false); action() }
+  return <div className="account" ref={rootRef}>
+    {open && <div className="account-menu" role="menu" aria-label="Tài khoản">
+      <button type="button" role="menuitem" title="Gắn các phân tích cũ trên trình duyệt này vào tài khoản" onClick={choose(onImport)}>Chuyển lịch sử cũ</button>
+      <button type="button" role="menuitem" className="account-menu-danger" onClick={choose(onLogout)}>Đăng xuất</button>
+    </div>}
+    <button type="button" className="account-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className="account-avatar" aria-hidden="true">{username.charAt(0).toLocaleUpperCase('vi-VN')}</span>
+      <span className="account-name">{username}</span>
+      <svg className="account-chevron" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </button>
+  </div>
+}
+
 function SampleContent({ sample }: { sample: DatasetSample }) {
   const sourceUrl = sample.source_url
   const safeUrl = sourceUrl && /^https?:\/\//i.test(sourceUrl) ? sourceUrl : null
   return <>
     {!safeUrl && <p>Nội dung và nguồn do dữ liệu cung cấp, chưa được kiểm chứng.</p>}
-    <p>{sample.text}</p>
+    <ExpandableText text={sample.text} />
     <p>Nguồn: {safeUrl
       ? <a href={safeUrl} target="_blank" rel="noopener noreferrer">{sample.source} ↗</a>
       : <>{sample.source} (chưa xác minh)</>}</p>
   </>
+}
+
+function ClaimsList({ claims }: { claims: AnalysisResult['claims'] }) {
+  return <div className="claims-list">
+    {claims.map((claim, index) => <article className="claim-item" key={`${claim.text}-${index}`}>
+      <div className="claim-heading"><span className="claim-index">{String(index + 1).padStart(2, '0')}</span><span className={`verdict verdict-${claim.verdict}`}>{verdictLabels[claim.verdict] ?? claim.verdict}</span></div>
+      <h2>{claim.text}</h2>
+      <p>{claim.reasoning}</p>
+      {claim.verdict === 'refuted' && claim.correction && <aside className="correction-panel" aria-label="Thông tin đã chỉnh sửa theo nguồn">
+        <strong>Thông tin này có thể chưa chính xác. Có phải bạn muốn hỏi:</strong>
+        <p>{claim.correction}</p>
+      </aside>}
+      {claim.verdict === 'refuted' && !claim.correction && <p>Chưa đủ nguồn phù hợp để đề xuất thông tin đã chỉnh sửa.</p>}
+      {claim.evidence.length > 0 && <ul className="evidence-list">{claim.evidence.map((evidence) => <li key={evidence.url}>
+        <a href={evidence.url} target="_blank" rel="noreferrer">{evidence.title} <span aria-hidden="true">↗</span></a>
+        <span className="evidence-type">{evidenceTypeLabels[evidence.source_type] ?? 'Nguồn tham khảo'}</span>
+        <p>{evidence.snippet}</p>
+      </li>)}</ul>}
+    </article>)}
+  </div>
+}
+
+function EvidenceSection({ result }: { result: AnalysisResult }) {
+  const check = result.dataset_result?.evidence_check
+  if (!check || check.status === 'not_needed') return null
+  return <section className="evidence-section" aria-label="Đối chiếu bằng chứng web">
+    <p className="message-kicker">ĐỐI CHIẾU BẰNG CHỨNG WEB · THAM KHẢO</p>
+    {check.status === 'ready' && <>
+      <p>{result.claims.length
+        ? `${result.claims.length} tuyên bố được tách và đối chiếu với nguồn trên web.`
+        : 'Không tách được tuyên bố có thể kiểm chứng từ nội dung này.'}</p>
+      {result.claims.length > 0 && <ClaimsList claims={result.claims} />}
+      <p>Phần này do LLM tổng hợp từ kết quả tìm kiếm, có thể sai. Hãy mở và đọc nguồn gốc.</p>
+    </>}
+    {check.status !== 'ready' && <p>{check.message ?? 'Đối chiếu bằng chứng web hiện không khả dụng.'}</p>}
+  </section>
 }
 
 function getBrowserSessionId(): string {
@@ -336,12 +415,7 @@ export default function App() {
         <button className={`sidebar-link ${view === 'history' ? 'sidebar-link-active' : ''}`} type="button" onClick={() => { void showHistory(); setSidebarOpen(false) }}>
           Xem tất cả
         </button>
-        <div className="sidebar-bottom">
-          <p>Đăng nhập: {user.username}</p>
-          <button type="button" onClick={() => void importHistory()}>Chuyển lịch sử cũ của trình duyệt này</button>
-          <button type="button" onClick={() => void logout()}>Đăng xuất</button>
-          <p>AI có thể sai. Luôn mở và kiểm tra nguồn gốc.</p>
-        </div>
+        <AccountMenu username={user.username} onImport={() => void importHistory()} onLogout={() => void logout()} />
       </aside>
       {sidebarOpen && <button className="sidebar-scrim" aria-label="Đóng thanh điều hướng" onClick={() => setSidebarOpen(false)} />}
       <header className="topbar">
@@ -352,23 +426,23 @@ export default function App() {
         </nav>
       </header>
 
-      <section className="workspace" aria-labelledby="page-title">
+      <section className={`workspace ${view === 'compose' ? 'workspace-compose' : ''}`} aria-labelledby="page-title">
         {view === 'compose' && <>
           <div className="intro welcome-block">
             <p className="eyebrow">NEWSROOM / LAB</p>
-            <h1 id="page-title">Mình cùng<br /><em>kiểm chứng nhé.</em></h1>
+            <h1 id="page-title">Mình cùng <em>kiểm chứng nhé.</em></h1>
             <p className="intro-copy">Gửi một thông tin hoặc chủ đề, mình sẽ tìm nội dung liên quan để cùng bạn xem xét.</p>
           </div>
           <div className="workflow" aria-label="Quy trình phân tích">
             <div><span>01</span><p>Đọc thông tin</p></div><b aria-hidden="true">/</b>
-            <div><span>02</span><p>Tìm nội dung liên quan</p></div><b aria-hidden="true">/</b>
+            <div><span>02</span><p>Đối chiếu dữ liệu &amp; bằng chứng web</p></div><b aria-hidden="true">/</b>
             <div><span>03</span><p>Đọc kết quả</p></div>
           </div>
         </>}
 
         {(view === 'result' || view === 'progress') && <div className="chat-transcript">
         {results.map((result) => <section key={result.id} className="result-view" aria-label="Lượt hội thoại">
-          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><p>{result.input_content || 'Nội dung đã gửi để phân tích'}</p></div></article>
+          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><ExpandableText text={result.input_content || 'Nội dung đã gửi để phân tích'} /></div></article>
           <article className="chat-message assistant-message"><span className="message-avatar assistant-avatar">N.</span><div className="message-body result-message-body">
           {result.status === 'completed' && result.overall ? <>
           {result.dataset_result ? <>
@@ -376,7 +450,9 @@ export default function App() {
             ? `Mình tìm thấy nội dung trùng khớp. Theo dữ liệu tham khảo, thông tin này được gắn nhãn ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}.`
             : result.dataset_result.method === 'prediction'
               ? `Mô hình dự đoán thông tin này nghiêng về ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}, nhưng mình chưa tìm thấy nội dung trùng khớp để đối chiếu.`
-              : 'Mình chưa tìm thấy nội dung đủ khớp để kết luận thông tin này là thật hay giả.'}</p>
+              : result.dataset_result.overall_basis === 'evidence'
+                ? `Mình chưa tìm thấy nội dung khớp trong dữ liệu tham khảo. Kết quả đối chiếu bằng chứng trên web (chỉ để tham khảo): ${resultLabels[result.overall.label] ?? result.overall.label}.`
+                : 'Mình chưa tìm thấy nội dung đủ khớp để kết luận thông tin này là thật hay giả.'}</p>
           {result.dataset_result.follow_up?.question && <p>{result.dataset_result.follow_up.question}</p>}
           {result.dataset_result.follow_up?.status === 'unavailable' && <p>Phần hỗ trợ diễn đạt hiện không khả dụng. Bạn có thể gửi thêm nội dung cụ thể để mình xem xét.</p>}
           {result.dataset_result.match && <section className="correction-panel" aria-label="Nội dung tham khảo">
@@ -392,34 +468,19 @@ export default function App() {
             </article>)}
           </section>}
           {!result.dataset_result.suggestions.length && <p>Mình chưa tìm thấy tin liên quan phù hợp để gợi ý thêm.</p>}
+          <EvidenceSection result={result} />
           </> : <>
           <p className="result-label">{resultLabels[result.overall.label] ?? result.overall.label}</p>
           <p className="result-summary">{result.overall.summary}</p>
           {result.source_assessment.domain && <p className="source-assessment">Nguồn bài viết: <strong>{result.source_assessment.domain}</strong> · Uy tín: {result.source_assessment.reputation}</p>}
-          <div className="claims-list">
-            {result.claims.map((claim, index) => <article className="claim-item" key={`${claim.text}-${index}`}>
-              <div className="claim-heading"><span className="claim-index">{String(index + 1).padStart(2, '0')}</span><span className={`verdict verdict-${claim.verdict}`}>{verdictLabels[claim.verdict] ?? claim.verdict}</span></div>
-              <h2>{claim.text}</h2>
-              <p>{claim.reasoning}</p>
-              {claim.verdict === 'refuted' && claim.correction && <aside className="correction-panel" aria-label="Thông tin đã chỉnh sửa theo nguồn">
-                <strong>Thông tin này có thể chưa chính xác. Có phải bạn muốn hỏi:</strong>
-                <p>{claim.correction}</p>
-              </aside>}
-              {claim.verdict === 'refuted' && !claim.correction && <p>Chưa đủ nguồn phù hợp để đề xuất thông tin đã chỉnh sửa.</p>}
-              {claim.evidence.length > 0 && <ul className="evidence-list">{claim.evidence.map((evidence) => <li key={evidence.url}>
-                <a href={evidence.url} target="_blank" rel="noreferrer">{evidence.title} <span aria-hidden="true">↗</span></a>
-                <span className="evidence-type">{evidenceTypeLabels[evidence.source_type] ?? 'Nguồn tham khảo'}</span>
-                <p>{evidence.snippet}</p>
-              </li>)}</ul>}
-            </article>)}
-          </div>
+          <ClaimsList claims={result.claims} />
           </>}
           </> : <p>{result.status === 'failed' ? 'Phân tích thất bại.' : 'Đang xử lý phân tích.'}</p>}
           </div></article>
         </section>)}
 
         {view === 'progress' && <section className="state-panel" aria-live="polite">
-          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><p>{submittedContent}</p></div></article>
+          <article className="chat-message user-message"><span className="message-avatar user-avatar">Bạn</span><div className="message-body"><ExpandableText text={submittedContent} /></div></article>
           <article className="chat-message assistant-message"><span className="message-avatar assistant-avatar">N.</span><div className="message-body">
             <p className="message-kicker">ĐANG KIỂM CHỨNG · {progress.progress}%</p><p>{progress.message}</p>
             <progress className="progress-bar" max="100" value={progress.progress} />
@@ -431,7 +492,7 @@ export default function App() {
         </div>}
 
         {view === 'history' && <section className="history-view" aria-labelledby="page-title">
-          <p className="eyebrow">TÀI KHOẢN NÀY</p><h1 id="page-title">Lịch sử<br /><em>kiểm chứng.</em></h1>
+          <h1 id="page-title">Lịch sử <em>kiểm chứng</em></h1>
           {history.length ? <ul className="history-list">{history.map((item) => <li key={item.id}>
             <button type="button" onClick={() => void loadConversation(item.id).catch((cause: unknown) => setError(errorMessage(cause, 'Không tải được kết quả.')))}>
               <span className="history-type">{item.title}</span>

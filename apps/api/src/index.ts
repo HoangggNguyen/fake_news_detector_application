@@ -12,6 +12,8 @@ import { analysisSchema } from './validation.js'
 import { classifierSignalSchema } from './classifier.js'
 import { classifyDataset, datasetResultSchema } from './dataset.js'
 import { makeFollowUp } from './conversation.js'
+import { analyzeContent } from './analyzer.js'
+import { combineResults, runEvidenceCheck, shouldCheckEvidence, type EvidenceAnalysis } from './hybrid.js'
 import { authRouter, requireAuth, type AuthenticatedRequest } from './auth.js'
 
 const app = express()
@@ -58,7 +60,11 @@ const sensitiveRequestLimit = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
 })
-app.use('/api/auth', sensitiveRequestLimit)
+// Chỉ giới hạn đăng nhập/đăng ký (POST); GET /api/auth/me chạy mỗi lần tải trang.
+app.use('/api/auth', (request, response, next) => {
+  if (request.method === 'POST') return sensitiveRequestLimit(request, response, next)
+  next()
+})
 app.use('/api/analyses', (request, response, next) => {
   if (request.method === 'POST') return sensitiveRequestLimit(request, response, next)
   next()
@@ -90,29 +96,36 @@ async function processAnalysis(analysisId: string) {
     sendProgress(analysisId, 'extract', 'Đang chuẩn bị nội dung', 10)
     let content = String(analysis.input_text)
     let sourceUrl: string | null = analysis.url ? String(analysis.url) : null
+    let articleTitle: string | null = null
     if (analysis.input_type === 'url') {
       const extracted = await extractArticle(String(analysis.url))
       content = extracted.text
       sourceUrl = extracted.url
+      articleTitle = extracted.title
     }
 
-    sendProgress(analysisId, 'evidence', 'Đang đối chiếu thông tin', 35)
+    // Lớp 1: tra mẫu trong dữ liệu train + classifier TF-IDF (kết quả chính).
+    sendProgress(analysisId, 'dataset', 'Đang đối chiếu với dữ liệu tham khảo', 25)
     const datasetResult = await classifyDataset(content, aiServiceUrl)
-    sendProgress(analysisId, 'response', 'Đang chuẩn bị câu trả lời', 65)
+
+    // Lớp 2: tách tuyên bố + tìm bằng chứng web bằng LLM (tham khảo, chỉ khi chưa có mẫu khớp).
+    let evidenceCheck = shouldCheckEvidence(datasetResult)
+    let evidence: EvidenceAnalysis | null = null
+    if (!evidenceCheck) {
+      sendProgress(analysisId, 'evidence', 'Chưa có mẫu khớp, đang tìm bằng chứng trên web', 45)
+      const outcome = await runEvidenceCheck(() => analyzeContent(content, sourceUrl, articleTitle))
+      evidenceCheck = outcome.check
+      evidence = outcome.evidence
+    }
+
+    sendProgress(analysisId, 'response', 'Đang chuẩn bị câu trả lời', 75)
     const followUp = await makeFollowUp(content, datasetResult)
-    const match = datasetResult.match
+    const overall = combineResults(datasetResult, evidence)
     const result = aiResultSchema.parse({
-      overall: {
-        credibility_score: match ? (datasetResult.label === 'real' ? 1 : 0)
-          : datasetResult.method === 'prediction' && datasetResult.classifier ? datasetResult.classifier.probabilities.real : 0.5,
-        label: datasetResult.label ? (datasetResult.label === 'real' ? 'likely_true' : 'likely_false') : 'insufficient_evidence',
-        summary: match ? 'Thông tin này khớp với nội dung trong dữ liệu tham khảo.'
-          : datasetResult.method === 'prediction' ? 'Dự đoán từ classifier; chưa có mẫu khớp chính xác.'
-            : 'Chưa tìm được mẫu khớp đủ rõ để kết luận.',
-      },
-      claims: [],
+      overall: { credibility_score: overall.credibility_score, label: overall.label, summary: overall.summary },
+      claims: evidence?.claims ?? [],
       classifier_signal: datasetResult.classifier,
-      source_assessment: { domain: null, reputation: 'Chưa xác minh' },
+      source_assessment: { domain: sourceUrl ? new URL(sourceUrl).hostname : null, reputation: 'Chưa xác minh' },
       disclaimer: '',
     })
     sendProgress(analysisId, 'save', 'Đang lưu kết quả', 85)
@@ -126,7 +139,12 @@ async function processAnalysis(analysisId: string) {
       )
       await connection.execute(
         'INSERT INTO dataset_results (analysis_id, result) VALUES (?, ?)',
-        [analysisId, JSON.stringify({ ...datasetResult, follow_up: followUp })],
+        [analysisId, JSON.stringify({
+          ...datasetResult,
+          follow_up: followUp,
+          evidence_check: evidenceCheck,
+          overall_basis: overall.basis,
+        })],
       )
       for (const claim of result.claims) {
         const claimId = randomUUID()
@@ -275,7 +293,7 @@ async function getAnalysis(analysisId: string, userId: string) {
     classifier_signal: styleSignal,
     dataset_result: datasetResult,
     source_assessment: { domain: analysis.url ? new URL(String(analysis.url)).hostname : null, reputation: 'unknown' },
-    disclaimer: 'AI-generated, may be wrong. Verify independently.',
+    disclaimer: 'AI có thể sai. Hãy kiểm tra nguồn độc lập.',
   }
 }
 

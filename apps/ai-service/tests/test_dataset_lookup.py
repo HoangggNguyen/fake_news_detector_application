@@ -121,3 +121,13 @@ def test_new_dataset_conflicting_decorated_titles_are_unresolved(tmp_path):
     lookup = DatasetLookup([path])
     assert lookup.classify("[Tin tức] Một bản tin (Cập nhật đợt #99)", None)["label"] is None
     assert lookup.classify("Một bản tin", None)["label"] is None
+
+
+def test_artifact_decision_threshold_overrides_default(tmp_path, monkeypatch):
+    path = tmp_path / "train.csv"
+    write_samples(path, [{"id": "1", "title": "Bản tin ví dụ", "text": "Nội dung một", "domain": "A", "label": "0"}])
+    lookup = DatasetLookup([path])
+    monkeypatch.setattr("app.dataset_lookup.predict_style", lambda artifact, text: {"label": "fake", "confidence": 0.7})
+    assert lookup.classify("Nội dung khác hoàn toàn", {"min_training_words": 1})["method"] == "unresolved"
+    tuned = {"min_training_words": 1, "decision_threshold": 0.65}
+    assert lookup.classify("Nội dung khác hoàn toàn", tuned)["method"] == "prediction"

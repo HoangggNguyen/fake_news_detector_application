@@ -26,23 +26,36 @@ def resolve_model_path() -> Path:
     return repository_root / configured_path
 
 
+# Chỉ dùng train split cho tra cứu; val/test được giữ riêng để đánh giá.
+# vfnd_original: VFND gốc (tạo bằng ml/prepare_vfnd.py). Các bộ vfnd_dataset_* là dữ liệu giả lập cũ.
+DATASET_DIRS = (
+    "vfnd_original",
+    "vfnd_dataset_1000",
+    "vfnd_dataset_deduplicated",
+    "vfnd_dataset_10000_full",
+    "finance_data",
+)
+
+
+def resolve_dataset_paths(dataset_root: Path) -> list[Path]:
+    paths = []
+    for name in DATASET_DIRS:
+        path = dataset_root / name / "train.csv"
+        if path.is_file():
+            paths.append(path)
+        else:
+            logger.warning("Optional training dataset is missing: %s", path)
+    if not paths:
+        raise ValueError(f"No training datasets found under {dataset_root}")
+    return paths
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     application.state.classifier_artifact = None
     application.state.dataset_lookup = None
     try:
-        dataset_root = Path(__file__).resolve().parents[1]
-        paths = [
-            dataset_root / "vfnd_dataset_1000" / "train.csv",
-            dataset_root / "vfnd_dataset_deduplicated" / "train.csv",
-            dataset_root / "finance_data" / "train.csv",
-        ]
-        additional_dataset = dataset_root / "vfnd_dataset_10000_full" / "train.csv"
-        if additional_dataset.is_file():
-            paths.append(additional_dataset)
-        else:
-            logger.warning("Optional training dataset is missing: %s", additional_dataset)
-        application.state.dataset_lookup = DatasetLookup(paths)
+        application.state.dataset_lookup = DatasetLookup(resolve_dataset_paths(Path(__file__).resolve().parents[1]))
     except (OSError, ValueError):
         logger.exception("Training datasets could not be loaded.")
     model_path = resolve_model_path()

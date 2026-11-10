@@ -8,7 +8,10 @@
 
 - Web: React, TypeScript, Vite, Tailwind CSS.
 - API: Node.js, Express, MySQL; Redis/BullMQ là tùy chọn.
-- FastAPI đối chiếu dữ liệu train cục bộ và phục vụ classifier TF-IDF. Khi không có mẫu khớp, API có thể gọi Groq để tạo một câu hỏi tiếp theo; Groq không quyết định nhãn và không tìm nguồn web.
+- Phân tích kết hợp hai lớp:
+  1. **Lớp chính – dữ liệu + TF-IDF (FastAPI):** tra mẫu khớp trong dữ liệu train cục bộ; nếu không khớp, classifier TF-IDF chỉ đưa nhãn khi đủ độ dài và độ tin cậy ≥ ngưỡng đã chọn trên tập val (hiện 0,70; mặc định 0,9 nếu model chưa được hiệu chỉnh).
+  2. **Lớp tham khảo – LLM + bằng chứng web (API Node.js):** chỉ chạy khi lớp chính không có mẫu khớp. LLM (`LLM_PROVIDER`: Gemini/Groq/Ollama) tách tuyên bố, tìm bằng chứng qua Google Fact Check, Tavily và Wikipedia tiếng Việt, rồi đánh giá từng tuyên bố chỉ dựa trên nguồn tìm được.
+  Nhãn tổng ưu tiên mẫu khớp, sau đó tới dự đoán classifier; chỉ khi cả hai chưa kết luận mới dùng kết quả bằng chứng web (ghi rõ là tham khảo). Lỗi hoặc thiếu khóa ở lớp 2 không làm hỏng phân tích; giao diện hiển thị lý do. Tắt lớp 2 bằng `EVIDENCE_CHECK=false`. Groq vẫn có thể tạo một câu hỏi gợi ý cho nội dung không khớp.
 
 ## Yêu cầu
 
@@ -97,18 +100,18 @@ Mở giao diện tại <http://localhost:5173/>. Vite chuyển các request `/ap
 
 ### Chạy model classifier cùng backend
 
-API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:8000`). Service nạp các file train khi khởi động, và nạp model từ `ml/artifacts/classifier.joblib` nếu có. Bộ `vfnd_dataset_10000_full` là tùy chọn: nếu thiếu, service ghi cảnh báo và vẫn nạp các bộ còn lại. Cần khởi động lại AI service sau khi sửa dữ liệu train hoặc model. Nếu dataset bắt buộc hoặc service không sẵn sàng, phân tích thất bại thay vì âm thầm đổi sang tìm kiếm trên mạng.
+API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:8000`). Service nạp các file train khi khởi động, và nạp model từ `ml/artifacts/classifier.joblib` nếu có. Mọi thư mục dataset đều tùy chọn (`vfnd_original` là bộ chính); thư mục thiếu chỉ ghi cảnh báo, service chỉ lỗi khi không có bộ nào. Cần khởi động lại AI service sau khi sửa dữ liệu train hoặc model. Nếu dataset bắt buộc hoặc service không sẵn sàng, phân tích thất bại thay vì âm thầm đổi sang tìm kiếm trên mạng.
 
 ## Sử dụng
 
 1. Tạo tài khoản hoặc đăng nhập. Tài khoản dùng tên đăng nhập và mật khẩu; nút **Đăng xuất** thu hồi phiên đăng nhập hiện tại.
 2. Tạo cuộc trò chuyện, chọn **Văn bản** hoặc **Đường dẫn**, rồi gửi nội dung. Các lần gửi tiếp theo thuộc cùng cuộc trò chuyện cho đến khi chọn **Cuộc trò chuyện mới**.
-3. Nếu nội dung hoặc tiêu đề khớp mẫu train sau chuẩn hóa, xem nhãn và nguồn ghi trong mẫu giả lập. Nếu không khớp, classifier chỉ đưa dự đoán khi đủ độ dài và điểm tối thiểu 0,9; ngưỡng này là heuristic chưa hiệu chuẩn, không đảm bảo độ chính xác. Nếu chưa xác định, có thể xem tối đa ba mẫu gần giống; đây là gợi ý chứ không phải đính chính được xác minh. Mẫu trùng nhưng có nhãn trái nhau không được tự kết luận.
+3. Nếu nội dung hoặc tiêu đề khớp mẫu train sau chuẩn hóa, xem nhãn và nguồn ghi trong mẫu giả lập. Nếu không khớp, classifier chỉ đưa dự đoán khi đủ độ dài và độ tin cậy đạt ngưỡng (hiện 0,70, chọn trên tập val với 33 mẫu); ngưỡng này không đảm bảo độ chính xác trên tin mới. Nếu chưa xác định, có thể xem tối đa ba mẫu gần giống; đây là gợi ý chứ không phải đính chính được xác minh. Mẫu trùng nhưng có nhãn trái nhau không được tự kết luận.
 4. Chọn một cuộc trò chuyện ở sidebar hoặc **Xem tất cả** để xem lại các lượt gửi và kết quả. Sau khi đăng nhập, nút **Chuyển lịch sử cũ của trình duyệt này** chủ động gắn các phân tích cũ vào tài khoản; mỗi phân tích cũ thành một cuộc trò chuyện riêng.
 
-Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, dùng chế độ văn bản và không cấu hình khóa Groq. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
+Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, dùng chế độ văn bản, đặt `EVIDENCE_CHECK=false` và không cấu hình khóa Groq. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
 
-Với nội dung không khớp, tối đa 4.000 ký tự đầu của nội dung (bao gồm nội dung trích từ URL) được gửi tới Groq nếu cấu hình khóa. Không gửi thông tin nhạy cảm. Câu hỏi do Groq tạo chỉ là gợi ý hội thoại; nhãn và nguồn được lấy từ kết quả cục bộ. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
+Với nội dung không khớp, tối đa 80.000 ký tự đầu (bao gồm nội dung trích từ URL) được gửi tới LLM để tách tuyên bố, các tuyên bố được gửi tới dịch vụ tìm kiếm đã cấu hình, và tối đa 4.000 ký tự được gửi tới Groq để tạo câu hỏi nếu có khóa. Không gửi thông tin nhạy cảm. Kết quả bằng chứng web là tham khảo, do LLM tổng hợp và có thể sai; nhãn từ mẫu khớp hoặc classifier luôn được ưu tiên. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
 
 ## Kiểm tra
 
@@ -131,13 +134,45 @@ pnpm --filter @fake-news/api test
 
 - `USE_BULLMQ=false`: chạy job trong tiến trình API, không cần Redis.
 - Đổi thành `USE_BULLMQ=true` để dùng BullMQ; khi đó Redis trong `REDIS_URL` phải sẵn sàng.
+- `EVIDENCE_CHECK=true` (mặc định): bật lớp đối chiếu bằng chứng web khi không có mẫu khớp; cần khóa của `LLM_PROVIDER` và nên có `TAVILY_API_KEY` và/hoặc `GOOGLE_FACTCHECK_API_KEY`. Đặt `false` để chỉ dùng dữ liệu + TF-IDF.
 - `RATE_LIMIT_PER_MIN`: số request tối đa mỗi phút cho các endpoint `/api`; mặc định là `10`.
 - `GEMINI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`: tên model được gửi tới provider tương ứng.
 - `PORT`: cổng API, mặc định `3000`.
 
 ## Huấn luyện classifier (tùy chọn)
 
-Ba thư mục `apps/ai-service/vfnd_dataset_1000`, `apps/ai-service/vfnd_dataset_deduplicated` và `apps/ai-service/vfnd_dataset_10000_full` được người dùng mô tả là dữ liệu giả lập, với nhãn được chấp nhận làm chuẩn cho môi trường test. Chúng không chứng minh tính đúng sai của sự kiện thực tế; URL và các tuyên bố xác thực trong bộ 10.000 chưa được kiểm chứng. Các thư mục dữ liệu bị git-ignore; không đưa dữ liệu vào commit khi chưa xác nhận quyền sử dụng.
+### Dữ liệu chính: VFND gốc
+
+Bộ dữ liệu chính là VFND gốc ([thanhhocse96/vfnd-vietnamese-fake-news-datasets](https://github.com/thanhhocse96/vfnd-vietnamese-fake-news-datasets), GPL-3.0; tác giả đề nghị liên hệ trước khi dùng và trích dẫn: *Ho Quang Thanh and ninh-pm-se, Zenodo, 27-Feb-2019*). Tải và chuyển đổi một lần, từ thư mục gốc repository:
+
+```powershell
+git clone --depth 1 https://github.com/thanhhocse96/vfnd-vietnamese-fake-news-datasets.git <thư-mục-tạm>\vfnd
+apps\ai-service\.venv\Scripts\python.exe -I ml\prepare_vfnd.py --source <thư-mục-tạm>\vfnd --output apps\ai-service\vfnd_original
+```
+
+Script đọc `CSV/vn_news_226_tlfr.csv` (226 dòng → 225 mẫu duy nhất), lấy domain từ `vn_news_223_tdlfr.csv`, rồi chia phân tầng 70/15/15 với seed 42: train 159 (87 thật/72 giả), val 33 và test 33 (mỗi tập 18 thật/15 giả). Val/test **không trùng** nội dung với train. Thư mục `vfnd_original/` bị git-ignore. Cột `domain` gần như lộ nhãn (ví dụ `tinvn.info`) và không được dùng khi huấn luyện.
+
+Kết quả model `tfidf-vfnd-original-v4` (Logistic Regression được chọn qua CV 5-fold; train = VFND train + 4 mẫu tài chính):
+
+| Đánh giá | Số mẫu | Accuracy | Macro F1 |
+|---|---|---|---|
+| CV 5-fold (trung bình) | 163 | 0,908 | 0,904 |
+| Holdout 20% | 33 | 0,909 | 0,909 |
+| VFND val (độc lập) | 33 | 0,788 | 0,785 |
+| VFND test (độc lập) | 33 | 0,848 | 0,848 |
+
+Tập val/test chỉ có 33 mẫu nên sai số lớn (mỗi mẫu ≈ 3 điểm phần trăm). **Ngưỡng kết luận.** Với ngưỡng mặc định 0,9, classifier không kết luận mẫu test nào (độ tin cậy cao nhất ≈ 0,8). Ngưỡng được chọn lại bằng `python -m app.tune_threshold --val vfnd_original/val.csv --test vfnd_original/test.csv` theo quy tắc cố định trước: trên **val**, chọn ngưỡng thấp nhất (0,50–0,95, bước 0,05) mà model kết luận ≥ 5 mẫu và đúng ≥ 90% trên các mẫu đó; không đạt thì giữ 0,9. Ngưỡng được ghi vào `classifier.joblib` (`decision_threshold`); báo cáo ở `ml/artifacts/threshold_report.json`. Phải chạy lại lệnh này mỗi khi train lại.
+
+| Ngưỡng (val) | 0,50 | 0,55 | 0,60 | 0,65 | **0,70** | 0,75 | ≥ 0,80 |
+|---|---|---|---|---|---|---|---|
+| Số mẫu kết luận / 33 | 32 | 29 | 24 | 21 | **12** | 5 | 0 |
+| Đúng trên số kết luận | 78,1% | 82,8% | 87,5% | 85,7% | **91,7%** | 100% | – |
+
+Ngưỡng chọn: **0,70**. Đánh giá **một lần** trên test: kết luận 11/33 tin (độ phủ 33%), đúng 10/11 (**90,9%**); 22 tin còn lại trả "chưa xác định" và chuyển sang lớp bằng chứng web. Với 11 mẫu, khoảng tin cậy của 90,9% còn rất rộng.
+
+### Dữ liệu giả lập cũ (tùy chọn)
+
+AI service nạp phần train của mọi thư mục có sẵn trong `vfnd_original`, `vfnd_dataset_1000`, `vfnd_dataset_deduplicated`, `vfnd_dataset_10000_full`, `finance_data`; thư mục thiếu chỉ ghi cảnh báo. Ba thư mục `apps/ai-service/vfnd_dataset_1000`, `apps/ai-service/vfnd_dataset_deduplicated` và `apps/ai-service/vfnd_dataset_10000_full` được người dùng mô tả là dữ liệu giả lập, với nhãn được chấp nhận làm chuẩn cho môi trường test. Chúng không chứng minh tính đúng sai của sự kiện thực tế; URL và các tuyên bố xác thực trong bộ 10.000 chưa được kiểm chứng. Các thư mục dữ liệu bị git-ignore; không đưa dữ liệu vào commit khi chưa xác nhận quyền sử dụng.
 
 `apps/ai-service/finance_data/train.csv` bổ sung bốn bản tóm tắt viết lại từ nguồn công khai về vàng, xăng dầu, ngoại tệ và chứng khoán, mỗi bản có đường dẫn gốc và thời điểm cụ thể. Chúng là thông tin lịch sử, không phải báo giá hiện tại. Cả bốn mẫu đều được nguồn hỗ trợ; chưa có mẫu tin giả được kiểm chứng trong bộ tài chính này. Ứng dụng hiển thị toàn bộ bản tóm tắt đã lưu, không sao chép toàn văn bài báo nguồn.
 
@@ -156,7 +191,18 @@ py -3.11 -m venv .venv
 python -m pip install -r requirements.txt -r ..\..\ml\requirements.txt
 ```
 
-Từ `apps/ai-service`, chạy huấn luyện và đánh giá:
+Từ `apps/ai-service`, chạy huấn luyện và đánh giá trên VFND gốc:
+
+```powershell
+python -m app.train `
+  --input vfnd_original\train.csv `
+  --additional-train finance_data\train.csv `
+  --external vfnd_original\val.csv `
+  --external vfnd_original\test.csv `
+  --output-dir ..\..\ml\artifacts
+```
+
+Lệnh cũ cho các bộ giả lập (chỉ khi có các thư mục đó):
 
 ```powershell
 python -m app.train `
@@ -201,7 +247,7 @@ AI service (chỉ có tín hiệu classifier khi đã train và nạp model):
 | `GET` | `/model/status` | Phiên bản model đang nạp |
 | `POST` | `/predict` | Nhãn, xác suất và feature giải thích nếu model hỗ trợ |
 
-Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/predict` trả `503`; API chính bỏ qua tín hiệu này, không đổi điểm credibility, và tiếp tục luồng phân tích Groq.
+Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/predict` trả `503`; `/dataset/classify` vẫn tra được mẫu khớp nhưng không có dự đoán classifier; khi không khớp, API chuyển sang lớp đối chiếu bằng chứng web.
 
 ## Xử lý lỗi thường gặp
 
@@ -213,4 +259,4 @@ Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/pred
 
 ## Ghi chú về các phần đang phát triển
 
-`apps/ai-service` hiện là FastAPI health stub; luồng phân tích đang gọi provider trực tiếp từ API Node.js. Classifier TF-IDF, embedding/vector search và triển khai production chưa được tích hợp. Tiến trình phát triển theo phiên được ghi trong [log.md](log.md); quy tắc tiếp tục ghi log nằm trong [spec.md](spec.md).
+Luồng kết hợp (dữ liệu + TF-IDF làm lớp chính, LLM + bằng chứng web làm lớp tham khảo) đã được tích hợp. Embedding/vector search và triển khai production chưa được tích hợp; chất lượng của lớp bằng chứng web chưa được đánh giá độc lập. Tiến trình phát triển theo phiên được ghi trong [log.md](log.md); quy tắc tiếp tục ghi log nằm trong [spec.md](spec.md).
