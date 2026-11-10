@@ -91,11 +91,11 @@ function SampleContent({ sample }: { sample: DatasetSample }) {
   const sourceUrl = sample.source_url
   const safeUrl = sourceUrl && /^https?:\/\//i.test(sourceUrl) ? sourceUrl : null
   return <>
-    {!safeUrl && <p>Nội dung và nguồn do dữ liệu cung cấp, chưa được kiểm chứng.</p>}
+    {!safeUrl}
     <ExpandableText text={sample.text} />
     <p>Nguồn: {safeUrl
       ? <a href={safeUrl} target="_blank" rel="noopener noreferrer">{sample.source} ↗</a>
-      : <>{sample.source} (chưa xác minh)</>}</p>
+      : <>{sample.source}</>}</p>
   </>
 }
 
@@ -418,13 +418,13 @@ export default function App() {
         <AccountMenu username={user.username} onImport={() => void importHistory()} onLogout={() => void logout()} />
       </aside>
       {sidebarOpen && <button className="sidebar-scrim" aria-label="Đóng thanh điều hướng" onClick={() => setSidebarOpen(false)} />}
-      <header className="topbar">
+      {/* <header className="topbar">
         <button className="menu-button" type="button" onClick={() => setSidebarOpen(!sidebarOpen)} aria-expanded={sidebarOpen}>☰</button>
         <span className="topbar-title">{view === 'history' ? 'Lịch sử phân tích' : 'Không gian kiểm chứng'}</span>
-        <nav className="topbar-actions" aria-label="Điều hướng chính">
+        { <nav className="topbar-actions" aria-label="Điều hướng chính">
           <button type="button" onClick={() => { setView('compose'); setConversationId(''); setResults([]); setError('') }}>Phân tích mới</button>
-        </nav>
-      </header>
+        </nav> }
+      </header> */}
 
       <section className={`workspace ${view === 'compose' ? 'workspace-compose' : ''}`} aria-labelledby="page-title">
         {view === 'compose' && <>
@@ -449,7 +449,7 @@ export default function App() {
           <p className="result-summary">{result.dataset_result.method === 'match'
             ? `Mình tìm thấy nội dung trùng khớp. Theo dữ liệu tham khảo, thông tin này được gắn nhãn ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}.`
             : result.dataset_result.method === 'prediction'
-              ? `Mô hình dự đoán thông tin này nghiêng về ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}, nhưng mình chưa tìm thấy nội dung trùng khớp để đối chiếu.`
+              ? `Mô hình dự đoán thông tin này nghiêng về ${result.dataset_result.label === 'real' ? 'tin thật' : 'tin giả'}.`
               : result.dataset_result.overall_basis === 'evidence'
                 ? `Mình chưa tìm thấy nội dung khớp trong dữ liệu tham khảo. Kết quả đối chiếu bằng chứng trên web (chỉ để tham khảo): ${resultLabels[result.overall.label] ?? result.overall.label}.`
                 : 'Mình chưa tìm thấy nội dung đủ khớp để kết luận thông tin này là thật hay giả.'}</p>
@@ -467,7 +467,7 @@ export default function App() {
               <SampleContent sample={sample} />
             </article>)}
           </section>}
-          {!result.dataset_result.suggestions.length && <p>Mình chưa tìm thấy tin liên quan phù hợp để gợi ý thêm.</p>}
+          {!result.dataset_result.suggestions.length}
           <EvidenceSection result={result} />
           </> : <>
           <p className="result-label">{resultLabels[result.overall.label] ?? result.overall.label}</p>
@@ -538,7 +538,7 @@ export default function App() {
           )}
           {problem && <p className="composer-hint" id="composer-problem" aria-live="polite">{problem}</p>}
           <div className="form-footer">
-            <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp có thể được gửi tới Groq để tạo câu hỏi.</span>
+            {/* <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp có thể được gửi tới Groq để tạo câu hỏi.</span> */}
             <button className="submit-button" type="submit" disabled={!canSubmit}>
               {busy ? 'Đang gửi...' : 'Phân tích'} <span aria-hidden="true">↗</span>
             </button>
