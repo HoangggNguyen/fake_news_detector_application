@@ -365,3 +365,8 @@ h1 em { color: #567b68; font-family: 'Lora', serif; font-weight: 500; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Gợi ý lý do chưa gửi được và nút kiểm tra lại tiến trình */
+.composer-hint { margin: 6px 0 0; color: #a3372b; font-size: 12.5px; line-height: 1.5; }
+.analysis-form textarea[aria-invalid="true"], .analysis-form input[aria-invalid="true"] { box-shadow: inset 2px 0 0 #a3372b; }
+.retry-button { margin-top: 10px; border: 1px solid currentColor; padding: 6px 12px; border-radius: 999px; background: transparent; font-size: 12.5px; cursor: pointer; }
