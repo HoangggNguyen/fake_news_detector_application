@@ -705,7 +705,7 @@ export default function App() {
             <div className="intro welcome-block">
               <p className="eyebrow">NEWSROOM / LAB</p>
               <h1 id="page-title">
-                Mình cùng <em>kiểm chứng nhé.</em>
+                Mình cùng kiểm chứng nhé
               </h1>
               <p className="intro-copy">
                 Gửi một thông tin hoặc chủ đề, mình sẽ tìm nội dung liên quan để
