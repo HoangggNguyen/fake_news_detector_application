@@ -93,9 +93,26 @@ class DatasetLookup:
         if len(labels) == 1:
             return {"method": "match", "label": labels.pop(), "match": matches[0], "suggestions": suggestions, "classifier": None}
         signal = None
-        if artifact is not None and len(normalized.split()) >= int(artifact.get("min_training_words", 0)):
-            signal = predict_style(artifact, text)
+        # Lý do mô hình không đưa nhãn, để giao diện giải thích thay vì chỉ ghi "chưa xác định".
+        skipped: dict[str, Any] | None = None
+        if artifact is None:
+            skipped = {"reason": "model_unavailable"}
+        else:
+            word_count = len(normalized.split())
+            min_words = int(artifact.get("min_training_words", 0))
+            if word_count >= min_words:
+                signal = predict_style(artifact, text)
+            else:
+                # Mô hình chỉ học các bài dài từ min_words từ; dự đoán trên tin ngắn hơn là ngoài phân phối.
+                skipped = {"reason": "too_short", "min_words": min_words, "word_count": word_count}
         threshold = float((artifact or {}).get("decision_threshold", DEFAULT_DECISION_THRESHOLD))
         if not matches and signal is not None and signal["confidence"] >= threshold:
             return {"method": "prediction", "label": signal["label"], "match": None, "suggestions": suggestions, "classifier": signal}
-        return {"method": "unresolved", "label": None, "match": None, "suggestions": suggestions, "classifier": signal}
+        if matches:
+            skipped = {"reason": "conflicting_matches"}
+        elif signal is not None:
+            skipped = {"reason": "low_confidence"}
+        return {
+            "method": "unresolved", "label": None, "match": None, "suggestions": suggestions,
+            "classifier": signal, "classifier_skipped": skipped,
+        }

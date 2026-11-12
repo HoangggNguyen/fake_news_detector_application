@@ -1,8 +1,8 @@
 # Fake News Detector
 
-Ứng dụng thử nghiệm phân loại tin theo nhãn của hai bộ dữ liệu giả lập được cung cấp. Các nhãn và nguồn trong dữ liệu chỉ được coi là chuẩn trong môi trường test, không phải kết quả kiểm chứng sự kiện ngoài đời.
+Ứng dụng thử nghiệm hỗ trợ nhận diện tin giả tiếng Việt. Bộ dữ liệu chính là VFND gốc (225 bài báo có nhãn thật/giả); các bộ dữ liệu giả lập cũ là tùy chọn. Nhãn trong dữ liệu là nhãn của bộ dữ liệu, không phải kết quả kiểm chứng sự kiện ngoài đời. Dự đoán của mô hình dựa trên cách viết, không phải kiểm chứng nội dung.
 
-**Cảnh báo bảo mật:** Theo yêu cầu, bảng `users` lưu thêm mật khẩu nguyên văn trong `real_pass`, bên cạnh mật khẩu băm dùng để đăng nhập. Bất kỳ ai đọc được database hoặc bản sao lưu đều có thể xem mật khẩu. Chỉ sử dụng mật khẩu thử nghiệm riêng; không dùng mật khẩu thật và không triển khai công khai cấu hình này.
+Mật khẩu chỉ được lưu dưới dạng băm (scrypt, có salt); không lưu mật khẩu nguyên văn.
 
 ## Công nghệ
 
@@ -10,8 +10,8 @@
 - API: Node.js, Express, MySQL; Redis/BullMQ là tùy chọn.
 - Phân tích kết hợp hai lớp:
   1. **Lớp chính – dữ liệu + TF-IDF (FastAPI):** tra mẫu khớp trong dữ liệu train cục bộ; nếu không khớp, classifier TF-IDF chỉ đưa nhãn khi đủ độ dài và độ tin cậy ≥ ngưỡng đã chọn trên tập val (hiện 0,70; mặc định 0,9 nếu model chưa được hiệu chỉnh).
-  2. **Lớp tham khảo – LLM + bằng chứng web (API Node.js):** chỉ chạy khi lớp chính không có mẫu khớp. LLM (`LLM_PROVIDER`: Gemini/Groq/Ollama) tách tuyên bố, tìm bằng chứng qua Google Fact Check, Tavily và Wikipedia tiếng Việt, rồi đánh giá từng tuyên bố chỉ dựa trên nguồn tìm được.
-  Nhãn tổng ưu tiên mẫu khớp, sau đó tới dự đoán classifier; chỉ khi cả hai chưa kết luận mới dùng kết quả bằng chứng web (ghi rõ là tham khảo). Lỗi hoặc thiếu khóa ở lớp 2 không làm hỏng phân tích; giao diện hiển thị lý do. Tắt lớp 2 bằng `EVIDENCE_CHECK=false`. Groq vẫn có thể tạo một câu hỏi gợi ý cho nội dung không khớp.
+  2. **Lớp tham khảo – LLM + bằng chứng web (API Node.js):** chỉ chạy khi lớp chính không có mẫu khớp. LLM (`LLM_PROVIDER`: Gemini/Groq/Ollama) tách tuyên bố, tìm bằng chứng qua Google Fact Check, Tavily và Wikipedia tiếng Việt, rồi đánh giá từng tuyên bố chỉ dựa trên nguồn tìm được. Với thông tin thay đổi theo thời gian (giá vàng, tỷ giá, thời tiết...), LLM được cho biết ngày hiện tại và chỉ dùng nguồn nói về cùng ngày để ủng hộ hoặc bác bỏ; không có nguồn cùng thời điểm thì kết quả là "chưa đủ bằng chứng".
+  Nhãn tổng ưu tiên mẫu khớp, sau đó tới dự đoán classifier; chỉ khi cả hai chưa kết luận mới dùng kết quả bằng chứng web (ghi rõ là tham khảo). Lỗi hoặc thiếu khóa ở lớp 2 không làm hỏng phân tích; giao diện hiển thị lý do. Tắt lớp 2 bằng `EVIDENCE_CHECK=false`. Câu hỏi gợi ý của Groq mặc định tắt (`FOLLOW_UP_QUESTION=false`).
 
 ## Yêu cầu
 
@@ -50,7 +50,8 @@ test -f .env || cp .env.example .env
 Mở `.env` và cấu hình:
 
 - `DATABASE_URL`: địa chỉ, tài khoản và database MySQL. Compose bên dưới tạo mặc định database `fakenews`, user `mysql`, password `mysql` trên cổng `3306`.
-- `GROQ_API_KEY` và tùy chọn `GROQ_MODEL`: bật câu hỏi tự nhiên khi không có mẫu khớp. Không commit hoặc chia sẻ file `.env`. Nếu thiếu khóa hoặc dịch vụ lỗi, giao diện thông báo phần diễn đạt không khả dụng và vẫn hiển thị kết quả tra cứu.
+- `GROQ_API_KEY` và tùy chọn `GROQ_MODEL`: dùng khi `LLM_PROVIDER=groq`. Không commit hoặc chia sẻ file `.env`.
+- `FOLLOW_UP_QUESTION` (mặc định `false`): bật câu hỏi gợi ý do Groq viết khi không có mẫu khớp. Mặc định tắt vì câu trả lời của người dùng không được ghép vào phân tích trước (mỗi lần gửi được phân tích độc lập); thay vào đó giao diện hiện hướng dẫn cố định: dán toàn văn bài (từ 80 từ) hoặc đường dẫn bài gốc.
 
 Nếu đã có MySQL cục bộ với tài khoản khác, sửa `DATABASE_URL` cho phù hợp. Không thay đổi mật khẩu hoặc dữ liệu của một MySQL hiện có chỉ để khớp giá trị mẫu.
 
@@ -69,6 +70,8 @@ Nếu đang dùng database đã được khởi tạo trước thay đổi này,
 Với database đã có schema trước tính năng tài khoản, chạy thêm một lần `apps/api/db/migrations/20261107_accounts_conversations.sql` sau migration trên. Migration bổ sung bảng tài khoản, phiên đăng nhập, hội thoại và các cột liên quan; không xóa lịch sử cũ. Database mới dùng `init.sql` đã có schema này và không cần chạy các migration đó.
 
 Với database đã có, chạy `apps/api/db/migrations/003_dataset_results.sql` để bổ sung bảng lưu kết quả và gợi ý dữ liệu giả lập.
+
+Với database tạo trước ngày 12/11/2026, chạy thêm một lần `apps/api/db/migrations/20261112_security_and_failure_reason.sql`: xóa cột mật khẩu nguyên văn `real_pass` và cột không dùng `content_hash`, thêm cột `error_message` để lưu lý do khi phân tích thất bại.
 
 ### 4. Chạy API và web
 
@@ -106,12 +109,12 @@ API gọi AI service tại `AI_SERVICE_URL` (mặc định `http://localhost:800
 
 1. Tạo tài khoản hoặc đăng nhập. Tài khoản dùng tên đăng nhập và mật khẩu; nút **Đăng xuất** thu hồi phiên đăng nhập hiện tại.
 2. Tạo cuộc trò chuyện, chọn **Văn bản** hoặc **Đường dẫn**, rồi gửi nội dung. Các lần gửi tiếp theo thuộc cùng cuộc trò chuyện cho đến khi chọn **Cuộc trò chuyện mới**.
-3. Nếu nội dung hoặc tiêu đề khớp mẫu train sau chuẩn hóa, xem nhãn và nguồn ghi trong mẫu giả lập. Nếu không khớp, classifier chỉ đưa dự đoán khi đủ độ dài và độ tin cậy đạt ngưỡng (hiện 0,70, chọn trên tập val với 33 mẫu); ngưỡng này không đảm bảo độ chính xác trên tin mới. Nếu chưa xác định, có thể xem tối đa ba mẫu gần giống; đây là gợi ý chứ không phải đính chính được xác minh. Mẫu trùng nhưng có nhãn trái nhau không được tự kết luận.
-4. Chọn một cuộc trò chuyện ở sidebar hoặc **Xem tất cả** để xem lại các lượt gửi và kết quả. Sau khi đăng nhập, nút **Chuyển lịch sử cũ của trình duyệt này** chủ động gắn các phân tích cũ vào tài khoản; mỗi phân tích cũ thành một cuộc trò chuyện riêng.
+3. Nếu nội dung hoặc tiêu đề khớp mẫu train sau chuẩn hóa, xem nhãn và nguồn ghi trong mẫu giả lập. Nếu không khớp, classifier chỉ đưa dự đoán khi nội dung dài từ 80 từ trở lên (độ dài ngắn nhất của bài trong tập train; tin ngắn hơn nằm ngoài phạm vi mô hình đã học và giao diện sẽ nói rõ lý do) và độ tin cậy đạt ngưỡng (hiện 0,70, chọn trên tập val với 33 mẫu); ngưỡng này không đảm bảo độ chính xác trên tin mới. Nếu chưa xác định, có thể xem tối đa ba mẫu gần giống; đây là gợi ý chứ không phải đính chính được xác minh. Mẫu trùng nhưng có nhãn trái nhau không được tự kết luận.
+4. Chọn một cuộc trò chuyện ở sidebar hoặc **Xem tất cả** để xem lại các lượt gửi và kết quả. Sau khi đăng nhập, mục **Chuyển lịch sử cũ** trong menu tài khoản chủ động gắn các phân tích cũ vào tài khoản; mỗi phân tích cũ thành một cuộc trò chuyện riêng.
 
 Phân tích cần MySQL và AI service hoạt động. Chế độ URL vẫn tải nội dung URL do người dùng cung cấp; để không truy cập Internet, dùng chế độ văn bản, đặt `EVIDENCE_CHECK=false` và không cấu hình khóa Groq. Địa chỉ nội bộ và nội dung tải vượt giới hạn sẽ bị từ chối.
 
-Với nội dung không khớp, tối đa 80.000 ký tự đầu (bao gồm nội dung trích từ URL) được gửi tới LLM để tách tuyên bố, các tuyên bố được gửi tới dịch vụ tìm kiếm đã cấu hình, và tối đa 4.000 ký tự được gửi tới Groq để tạo câu hỏi nếu có khóa. Không gửi thông tin nhạy cảm. Kết quả bằng chứng web là tham khảo, do LLM tổng hợp và có thể sai; nhãn từ mẫu khớp hoặc classifier luôn được ưu tiên. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
+Với nội dung không khớp, tối đa 10.000 ký tự đầu (`LLM_MAX_INPUT_CHARS`, bao gồm nội dung trích từ URL) được gửi tới LLM để tách tuyên bố; khi đánh giá, mỗi tuyên bố chỉ gửi kèm 4 nguồn ưu tiên với đoạn trích tối đa 300 ký tự, các tuyên bố được gửi tới dịch vụ tìm kiếm đã cấu hình, và chỉ khi `FOLLOW_UP_QUESTION=true` thì tối đa 4.000 ký tự được gửi tới Groq để tạo câu hỏi gợi ý. Không gửi thông tin nhạy cảm. Kết quả bằng chứng web là tham khảo, do LLM tổng hợp và có thể sai; nhãn từ mẫu khớp hoặc classifier luôn được ưu tiên. Giao diện không hiển thị điểm, và tên nguồn trong dữ liệu chưa chứng minh sự tồn tại của bài báo thực tế.
 
 ## Kiểm tra
 
@@ -134,8 +137,9 @@ pnpm --filter @fake-news/api test
 
 - `USE_BULLMQ=false`: chạy job trong tiến trình API, không cần Redis.
 - Đổi thành `USE_BULLMQ=true` để dùng BullMQ; khi đó Redis trong `REDIS_URL` phải sẵn sàng.
-- `EVIDENCE_CHECK=true` (mặc định): bật lớp đối chiếu bằng chứng web khi không có mẫu khớp; cần khóa của `LLM_PROVIDER` và nên có `TAVILY_API_KEY` và/hoặc `GOOGLE_FACTCHECK_API_KEY`. Đặt `false` để chỉ dùng dữ liệu + TF-IDF.
-- `RATE_LIMIT_PER_MIN`: số request tối đa mỗi phút cho các endpoint `/api`; mặc định là `10`.
+- `EVIDENCE_CHECK=true` (mặc định): bật lớp đối chiếu bằng chứng web khi không có mẫu khớp; cần khóa của `LLM_PROVIDER` và nên có `TAVILY_API_KEY` và/hoặc `GOOGLE_FACTCHECK_API_KEY`. Không có khóa tìm kiếm nào thì chỉ tra được Wikipedia, và kết quả sẽ ghi rõ điều đó. Đặt `false` để chỉ dùng dữ liệu + TF-IDF.
+- `MAX_CLAIMS` (mặc định `5`, tối đa `8`): số tuyên bố được tìm nguồn trong một lần phân tích. Mỗi tuyên bố dùng 1 lượt Tavily, nên một lần phân tích tốn tối đa `MAX_CLAIMS` lượt.
+- `RATE_LIMIT_PER_MIN`: số request tối đa mỗi phút cho `POST /api/auth/login`, `POST /api/auth/register` và `POST /api/analyses` (các endpoint khác không bị giới hạn); mặc định là `10`.
 - `GEMINI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`: tên model được gửi tới provider tương ứng.
 - `PORT`: cổng API, mặc định `3000`.
 
@@ -230,13 +234,23 @@ uvicorn app.main:app --reload --port 8000
 
 ## Endpoint chính
 
+Mọi endpoint `/api/*` trừ đăng ký và đăng nhập đều cần cookie đăng nhập; dữ liệu chỉ trả về cho tài khoản sở hữu.
+
 | Phương thức | Đường dẫn | Chức năng |
 |---|---|---|
 | `GET` | `/health` | Trạng thái API và MySQL |
+| `POST` | `/api/auth/register` | Tạo tài khoản và đăng nhập |
+| `POST` | `/api/auth/login` | Đăng nhập (cookie HTTP-only) |
+| `GET` | `/api/auth/me` | Tài khoản đang đăng nhập |
+| `POST` | `/api/auth/logout` | Đăng xuất, thu hồi phiên |
+| `GET` | `/api/conversations` | Danh sách cuộc trò chuyện của tài khoản |
+| `POST` | `/api/conversations` | Tạo cuộc trò chuyện |
+| `GET` | `/api/conversations/:id` | Các lượt phân tích trong cuộc trò chuyện |
+| `POST` | `/api/conversations/import-legacy` | Gắn phân tích cũ (theo trình duyệt) vào tài khoản |
 | `POST` | `/api/analyses` | Tạo phân tích từ văn bản hoặc URL |
-| `GET` | `/api/analyses/:id` | Lấy kết quả |
-| `GET` | `/api/analyses/:id/stream` | Theo dõi tiến độ qua SSE |
-| `GET` | `/api/analyses` | Lịch sử theo browser session |
+| `GET` | `/api/analyses/:id` | Lấy kết quả (kèm `error_message` khi thất bại) |
+| `GET` | `/api/analyses/:id/stream` | Theo dõi tiến độ qua SSE (sự kiện `progress`, `ping`, `complete`, `analysis-error`) |
+| `GET` | `/api/analyses` | 50 phân tích gần nhất của tài khoản |
 | `POST` | `/api/analyses/:id/feedback` | Gửi đánh giá kết quả |
 
 AI service (chỉ có tín hiệu classifier khi đã train và nạp model):
@@ -246,6 +260,7 @@ AI service (chỉ có tín hiệu classifier khi đã train và nạp model):
 | `GET` | `/health` | Trạng thái FastAPI và classifier |
 | `GET` | `/model/status` | Phiên bản model đang nạp |
 | `POST` | `/predict` | Nhãn, xác suất và feature giải thích nếu model hỗ trợ |
+| `POST` | `/dataset/classify` | Tra mẫu khớp + dự đoán; khi chưa kết luận có `classifier_skipped` ghi lý do (`too_short`, `low_confidence`, ...) |
 
 Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/predict` trả `503`; `/dataset/classify` vẫn tra được mẫu khớp nhưng không có dự đoán classifier; khi không khớp, API chuyển sang lớp đối chiếu bằng chứng web.
 
@@ -253,7 +268,7 @@ Khi classifier chưa sẵn sàng, FastAPI vẫn health-check được và `/pred
 
 - **API health trả `503`:** API vẫn có thể đang chạy nhưng chưa kết nối được MySQL. Xác nhận service đang nghe cổng trong `DATABASE_URL`, database tồn tại và thông tin đăng nhập đúng.
 - **`docker compose` không kết nối được:** mở Docker Desktop và chờ Docker Engine sẵn sàng; hoặc dùng MySQL cục bộ rồi cập nhật `DATABASE_URL`.
-- **Thiếu khóa Gemini/Groq:** chọn provider tương ứng trong `LLM_PROVIDER` và điền khóa trong `.env`. Không gửi khóa vào terminal log, chat hoặc Git.
+- **Thiếu khóa Gemini/Groq:** chọn provider tương ứng trong `LLM_PROVIDER` và điền khóa trong `.env`. Không gửi khóa vào terminal log, chat hoặc Git. Giao diện chỉ báo "Chức năng tìm nguồn trên Internet chưa được bật"; tên biến và mã lỗi chi tiết nằm trong log của API.
 - **Không tải được URL:** chỉ URL HTTP(S) công khai được hỗ trợ; website có thể chặn bot hoặc không trả nội dung HTML/văn bản.
 - **Port đã được sử dụng:** đổi `PORT` cho API; nếu đổi port web thì cập nhật proxy trong `apps/web/vite.config.ts`.
 

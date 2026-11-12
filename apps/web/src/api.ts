@@ -19,16 +19,16 @@ export class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 20_000
 
-const UNREACHABLE = 'Không kết nối được tới máy chủ. Vui lòng kiểm tra backend đã được bật hoặc thử lại sau.'
+const UNREACHABLE = 'Không kết nối được tới hệ thống. Vui lòng thử lại sau ít phút.'
 
 function messageForStatus(status: number): string {
   if (status === 401) return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
   if (status === 403) return 'Bạn không có quyền thực hiện thao tác này.'
   if (status === 404) return 'Không tìm thấy dữ liệu yêu cầu.'
-  if (status === 413) return 'Nội dung gửi lên quá lớn.'
+  if (status === 413) return 'Nội dung quá dài. Vui lòng rút gọn rồi gửi lại.'
   if (status === 429) return 'Bạn gửi quá nhiều yêu cầu. Vui lòng đợi một chút rồi thử lại.'
-  if (status >= 500) return `Máy chủ đang gặp sự cố (HTTP ${status}). Vui lòng thử lại sau.`
-  return `Yêu cầu không thành công (HTTP ${status}).`
+  if (status >= 500) return 'Hệ thống đang gặp sự cố. Vui lòng thử lại sau ít phút.'
+  return 'Yêu cầu chưa thực hiện được. Vui lòng thử lại.'
 }
 
 /** Đọc body JSON nếu có; body không phải JSON thì trả về null thay vì ném lỗi. */

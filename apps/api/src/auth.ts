@@ -94,8 +94,8 @@ authRouter.post('/register', async (request, response) => {
     const id = randomUUID()
     const hash = await hashPassword(password)
     await pool.execute(
-      'INSERT INTO users (id, username, password_hash, real_pass) VALUES (?, ?, ?, ?)',
-      [id, username, hash, password],
+      'INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)',
+      [id, username, hash],
     )
     await createLogin(id, response)
     response.status(201).json({ user: { id, username } })

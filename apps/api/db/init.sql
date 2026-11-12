@@ -2,7 +2,6 @@ CREATE TABLE IF NOT EXISTS users (
   id CHAR(36) PRIMARY KEY,
   username VARCHAR(80) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
-  real_pass VARCHAR(255) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -33,14 +32,13 @@ CREATE TABLE IF NOT EXISTS analyses (
   input_type ENUM('text', 'url') NOT NULL,
   input_text MEDIUMTEXT NOT NULL,
   url TEXT,
-  content_hash CHAR(64) NOT NULL,
   status ENUM('pending', 'processing', 'completed', 'failed') NOT NULL DEFAULT 'pending',
+  error_message VARCHAR(500),
   overall_score FLOAT,
   label VARCHAR(40),
   overall_summary TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX analyses_session_created (session_id, created_at),
-  INDEX analyses_content_hash (content_hash),
   INDEX analyses_conversation_created (conversation_id, created_at),
   CONSTRAINT analyses_conversation_fk FOREIGN KEY (conversation_id) REFERENCES conversations(id)
 );

@@ -1,5 +1,5 @@
 import type { DatasetResult } from './dataset.js'
-import type { analyzeContent } from './analyzer.js'
+import { ConfigurationError, type analyzeContent } from './analyzer.js'
 
 export type EvidenceAnalysis = Awaited<ReturnType<typeof analyzeContent>>
 
@@ -24,7 +24,8 @@ export function shouldCheckEvidence(result: DatasetResult, env: NodeJS.ProcessEn
     return { status: 'not_needed', message: 'Đã có mẫu khớp trong dữ liệu tham khảo.' }
   }
   if ((env.EVIDENCE_CHECK ?? 'true').toLowerCase() === 'false') {
-    return { status: 'disabled', message: 'Đối chiếu bằng chứng web đang tắt (EVIDENCE_CHECK=false).' }
+    console.info('Evidence check skipped: EVIDENCE_CHECK=false')
+    return { status: 'disabled', message: 'Chức năng tìm nguồn trên Internet đang tắt.' }
   }
   return null
 }
@@ -36,9 +37,12 @@ export async function runEvidenceCheck(
     const evidence = await run()
     return { check: { status: 'ready', message: null }, evidence }
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Lỗi không xác định.'
-    console.warn('Evidence check unavailable:', message)
-    return { check: { status: 'unavailable', message: `Không thể đối chiếu bằng chứng web: ${message}` }, evidence: null }
+    // Chi tiết kỹ thuật (thiếu khóa, HTTP 503, timeout...) chỉ ghi log.
+    console.warn('Evidence check unavailable:', error instanceof Error ? error.message : error)
+    const message = error instanceof ConfigurationError
+      ? 'Chức năng tìm nguồn trên Internet chưa được bật trên hệ thống này.'
+      : 'Chức năng tìm nguồn trên Internet tạm thời chưa dùng được. Bạn có thể thử lại sau ít phút.'
+    return { check: { status: 'unavailable', message }, evidence: null }
   }
 }
 
@@ -56,8 +60,8 @@ export function combineResults(dataset: DatasetResult, evidence: EvidenceAnalysi
       credibility_score: dataset.classifier.probabilities.real,
       label: dataset.label === 'real' ? 'likely_true' : 'likely_false',
       summary: evidence?.claims.length
-        ? 'Dự đoán từ classifier TF-IDF; kèm kết quả đối chiếu bằng chứng web để tham khảo.'
-        : 'Dự đoán từ classifier TF-IDF; chưa có mẫu khớp chính xác.',
+        ? 'Dự đoán của mô hình dựa trên cách viết; kèm các nguồn trên Internet để tham khảo.'
+        : 'Dự đoán của mô hình dựa trên cách viết; chưa có tin trùng khớp trong dữ liệu.',
       basis: 'classifier',
     }
   }
@@ -65,7 +69,7 @@ export function combineResults(dataset: DatasetResult, evidence: EvidenceAnalysi
     return {
       credibility_score: evidence.overall.credibility_score,
       label: evidence.overall.label,
-      summary: `Theo đối chiếu bằng chứng web (tham khảo): ${evidence.overall.summary}`,
+      summary: `Theo các nguồn trên Internet (để tham khảo): ${evidence.overall.summary}`,
       basis: 'evidence',
     }
   }

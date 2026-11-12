@@ -10,7 +10,7 @@ Web app: user submits text or URL, gets a **credibility score** with per-claim e
 ## Scope
 - In (MVP): text/URL input, content extraction, claim extraction, evidence retrieval, verdicts, source links, local accounts, account-owned conversation history.
 - Out (MVP): image/video/deepfake, extension, mobile app, payments.
-- Security warning: by user request, `users.real_pass` stores passwords in plaintext in addition to the password hash used for authentication. This is unsafe for real users or public deployment. Use only dedicated test passwords and remove the plaintext requirement before production.
+- Passwords are stored only as salted scrypt hashes (`users.password_hash`). The former plaintext column `real_pass` was removed on 2026-11-12 (migration `20261112_security_and_failure_reason.sql`).
 
 ## Architecture
 ```
@@ -223,10 +223,10 @@ Role: optional secondary dataset-classification signal; it never replaces eviden
 Optional AI-service endpoints: `GET /health`, `GET /model/status`, and `POST /predict` (classifier signal only).
 
 ## Data model
-- users: id, username, password_hash, real_pass (plaintext; unsafe and not suitable for production)
+- users: id, username, password_hash
 - login_sessions: token_hash, user_id, expires_at
 - conversations: id, user_id, title, created_at, updated_at
-- analyses: id, input_type, input_text, url, content_hash, status, overall_score, label, created_at
+- analyses: id, input_type, input_text, url, status, error_message (user-facing failure reason), overall_score, label, created_at
 - claims: id, analysis_id, text, verdict, confidence, reasoning
 - evidence: id, claim_id, title, url, snippet, stance, source_domain
 - classifier_signals: analysis_id, label, confidence, real_probability, fake_probability, model_name, model_version, top_features

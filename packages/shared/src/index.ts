@@ -61,6 +61,12 @@ export interface DatasetResult {
   match: DatasetSample | null
   suggestions: DatasetSample[]
   classifier: ClassifierSignal | null
+  /** Lý do mô hình không đưa nhãn (tin quá ngắn, chưa đủ chắc chắn...). */
+  classifier_skipped?: {
+    reason: 'too_short' | 'low_confidence' | 'conflicting_matches' | 'model_unavailable'
+    min_words?: number
+    word_count?: number
+  } | null
   follow_up?: {
     question: string | null
     status: 'ready' | 'unavailable' | 'not_needed'
@@ -89,5 +95,7 @@ export interface AnalysisResult {
   }
   classifier_signal?: ClassifierSignal | null
   dataset_result?: DatasetResult | null
+  /** Lý do thất bại (thân thiện với người dùng) khi status = failed. */
+  error_message?: string | null
   disclaimer: string
 }
