@@ -71,6 +71,7 @@ const aiResultSchema = z.object({
 });
 
 type AnalysisJob = { analysisId: string };
+const maxAnalysisAttempts = 3;
 function getUserId(request: Request): string {
   return (request as AuthenticatedRequest).userId;
 }
@@ -121,19 +122,22 @@ function sendProgress(
   progressEvents.emit(analysisId, { stage, message, progress });
 }
 
-async function processAnalysis(analysisId: string) {
+async function processAnalysis(
+  analysisId: string,
+  options: { willRetry?: boolean } = {},
+) {
   try {
     const [rows] = await pool.execute<RowDataPacket[]>(
       "SELECT * FROM analyses WHERE id = ?",
       [analysisId],
     );
     const analysis = rows[0];
-    if (!analysis) return;
+    if (!analysis || analysis.status === "completed") return;
 
-    await pool.execute("UPDATE analyses SET status = ? WHERE id = ?", [
-      "processing",
-      analysisId,
-    ]);
+    await pool.execute(
+      "UPDATE analyses SET status = ?, error_message = NULL WHERE id = ?",
+      ["processing", analysisId],
+    );
     sendProgress(analysisId, "extract", "Đang chuẩn bị nội dung", 10);
     let content = String(analysis.input_text);
     let sourceUrl: string | null = analysis.url ? String(analysis.url) : null;
@@ -194,7 +198,7 @@ async function processAnalysis(analysisId: string) {
     try {
       await connection.beginTransaction();
       await connection.execute(
-        "UPDATE analyses SET status = ?, overall_score = ?, label = ?, overall_summary = ?, url = ? WHERE id = ?",
+        "UPDATE analyses SET status = ?, error_message = NULL, overall_score = ?, label = ?, overall_summary = ?, url = ? WHERE id = ?",
         [
           "completed",
           result.overall.credibility_score,
@@ -280,11 +284,20 @@ async function processAnalysis(analysisId: string) {
     const message =
       error instanceof Error ? error.message : "Phân tích thất bại.";
     await pool
-      .execute("UPDATE analyses SET status = ? WHERE id = ?", [
-        "failed",
-        analysisId,
-      ])
+      .execute(
+        "UPDATE analyses SET status = ?, error_message = ? WHERE id = ?",
+        [options.willRetry ? "pending" : "failed", message.slice(0, 1000), analysisId],
+      )
       .catch(() => undefined);
+    if (options.willRetry) {
+      sendProgress(
+        analysisId,
+        "retrying",
+        "Lần xử lý này gặp lỗi tạm thời; hệ thống sẽ tự thử lại.",
+        85,
+      );
+      throw error;
+    }
     sendProgress(analysisId, "failed", message, 100);
   }
 }
@@ -305,7 +318,10 @@ if (process.env.USE_BULLMQ === "true") {
   analysisQueue = new Queue<AnalysisJob>("analyses", { connection });
   analysisWorker = new Worker<AnalysisJob>(
     "analyses",
-    (job) => processAnalysis(job.data.analysisId),
+    (job) =>
+      processAnalysis(job.data.analysisId, {
+        willRetry: job.attemptsMade + 1 < maxAnalysisAttempts,
+      }),
     { connection },
   );
 }
@@ -313,18 +329,27 @@ if (process.env.USE_BULLMQ === "true") {
 function dispatchAnalysis(analysisId: string) {
   if (analysisQueue) {
     void analysisQueue
-      .add("analyze", { analysisId }, { jobId: analysisId })
+      .add("analyze", { analysisId }, {
+        jobId: analysisId,
+        attempts: maxAnalysisAttempts,
+        backoff: { type: "exponential", delay: 2_000 },
+        removeOnComplete: 500,
+        removeOnFail: 1_000,
+      })
       .catch(async () => {
+        const message =
+          "Không thể đưa phân tích vào hàng đợi. Hãy kiểm tra Redis và cấu hình USE_BULLMQ.";
+        console.error("Enqueuing analysis failed:", analysisId);
         await pool
-          .execute("UPDATE analyses SET status = ? WHERE id = ?", [
-            "failed",
-            analysisId,
-          ])
+          .execute(
+            "UPDATE analyses SET status = ?, error_message = ? WHERE id = ?",
+            ["failed", message, analysisId],
+          )
           .catch(() => undefined);
         sendProgress(
           analysisId,
           "failed",
-          "Không thể đưa phân tích vào hàng đợi Redis.",
+          message,
           100,
         );
       });
@@ -333,9 +358,51 @@ function dispatchAnalysis(analysisId: string) {
   }
 }
 
+async function recoverUnfinishedAnalyses() {
+  const queue = analysisQueue;
+  if (!queue) return;
+  try {
+    const [rows] = await pool.execute<RowDataPacket[]>(
+      "SELECT id FROM analyses WHERE status IN ('pending', 'processing')",
+    );
+    for (const row of rows) {
+      const analysisId = String(row.id);
+      try {
+        const existingJob = await queue.getJob(analysisId);
+        if (existingJob) {
+          const state = await existingJob.getState();
+          if (!["failed", "completed"].includes(state)) continue;
+          await existingJob.remove();
+        }
+        await queue.add(
+          "analyze",
+          { analysisId },
+          {
+            jobId: analysisId,
+            attempts: maxAnalysisAttempts,
+            backoff: { type: "exponential", delay: 2_000 },
+            removeOnComplete: 500,
+            removeOnFail: 1_000,
+          },
+        );
+      } catch (error) {
+        console.error(
+          `Could not recover analysis ${analysisId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      "Could not scan for unfinished analyses:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 async function getAnalysis(analysisId: string, userId: string) {
   const [analysisRows] = await pool.execute<RowDataPacket[]>(
-    "SELECT a.id, a.status, a.overall_score, a.label, a.overall_summary, a.url, a.input_type, a.input_text, a.created_at FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
+    "SELECT a.id, a.status, a.error_message, a.overall_score, a.label, a.overall_summary, a.url, a.input_type, a.input_text, a.created_at FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
     [analysisId, userId],
   );
   const analysis = analysisRows[0];
@@ -393,6 +460,7 @@ async function getAnalysis(analysisId: string, userId: string) {
   return {
     id: analysis.id,
     status: analysis.status,
+    error_message: analysis.error_message ? String(analysis.error_message) : null,
     overall:
       analysis.overall_score === null
         ? null
@@ -624,7 +692,7 @@ app.get("/api/analyses/:id/stream", async (request, response) => {
   let rows: RowDataPacket[];
   try {
     [rows] = await pool.execute<RowDataPacket[]>(
-      "SELECT a.id, a.status FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
+      "SELECT a.id, a.status, a.error_message FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
       [request.params.id, userId],
     );
   } catch {
@@ -643,7 +711,11 @@ app.get("/api/analyses/:id/stream", async (request, response) => {
   const analysisId = request.params.id;
   const send = (event: string, payload: unknown) =>
     response.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
-  const onProgress = (payload: { stage?: string; progress?: number }) => {
+  const onProgress = (payload: {
+    stage?: string;
+    message?: string;
+    progress?: number;
+  }) => {
     send("progress", payload);
     if (payload.progress === 100) {
       if (payload.stage === "completed") send("complete", { id: analysisId });
@@ -658,19 +730,35 @@ app.get("/api/analyses/:id/stream", async (request, response) => {
     progress: 0,
   });
   if (["completed", "failed"].includes(String(rows[0].status))) {
-    onProgress({ stage: String(rows[0].status), progress: 100 });
+    onProgress({
+      stage: String(rows[0].status),
+      message: rows[0].error_message
+        ? String(rows[0].error_message)
+        : String(rows[0].status) === "failed"
+          ? "Phân tích thất bại."
+          : "Phân tích hoàn tất.",
+      progress: 100,
+    });
   }
   const heartbeat = setInterval(() => {
     response.write(": keep-alive\n\n");
     void pool
       .execute<RowDataPacket[]>(
-        "SELECT a.status FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
+        "SELECT a.status, a.error_message FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
         [analysisId, userId],
       )
       .then(([currentRows]) => {
         const status = String(currentRows[0]?.status ?? "");
         if (status === "completed" || status === "failed")
-          onProgress({ stage: status, progress: 100 });
+          onProgress({
+            stage: status,
+            message: currentRows[0]?.error_message
+              ? String(currentRows[0].error_message)
+              : status === "failed"
+                ? "Phân tích thất bại."
+                : "Phân tích hoàn tất.",
+            progress: 100,
+          });
       })
       .catch(() => undefined);
   }, 5_000);
@@ -728,13 +816,33 @@ app.use(
   },
 );
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`API listening on http://localhost:${port}`);
-  if (analysisWorker) console.log("BullMQ analysis worker enabled");
+  if (analysisWorker) {
+    console.log("BullMQ analysis worker enabled");
+    void recoverUnfinishedAnalyses();
+  }
 });
 
-process.on("SIGTERM", () => {
-  void analysisQueue?.close();
-  void analysisWorker?.close();
-  void pool.end();
-});
+let shuttingDown = false;
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}; shutting down gracefully.`);
+  server.close();
+  await analysisWorker?.close();
+  await analysisQueue?.close();
+  await pool.end();
+}
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void shutdown(signal).catch((error: unknown) => {
+      console.error(
+        "Graceful shutdown failed:",
+        error instanceof Error ? error.message : error,
+      );
+      process.exitCode = 1;
+    });
+  });
+}

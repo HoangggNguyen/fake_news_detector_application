@@ -421,11 +421,16 @@ export default function App() {
     const recover = (reason: string) => {
       if (finished) return;
       finish();
-      void apiRequest<{ status?: string }>(`/api/analyses/${analysisId}`)
+      void apiRequest<{ status?: string; error_message?: string | null }>(
+        `/api/analyses/${analysisId}`,
+      )
         .then((analysis) => {
           if (analysis.status === "completed") openResult();
           else if (analysis.status === "failed")
-            setError("Phân tích thất bại. Bạn có thể gửi lại nội dung.");
+            setError(
+              analysis.error_message ??
+                "Phân tích thất bại. Bạn có thể gửi lại nội dung.",
+            );
           else setError(reason);
         })
         .catch((cause: unknown) => setError(errorMessage(cause, reason)));
@@ -847,7 +852,7 @@ export default function App() {
                     ) : (
                       <p>
                         {result.status === "failed"
-                          ? "Phân tích thất bại."
+                          ? result.error_message ?? "Phân tích thất bại."
                           : "Đang xử lý phân tích."}
                       </p>
                     )}

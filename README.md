@@ -70,6 +70,8 @@ Với database đã có schema trước tính năng tài khoản, chạy thêm m
 
 Với database đã có, chạy `apps/api/db/migrations/003_dataset_results.sql` để bổ sung bảng lưu kết quả và gợi ý dữ liệu giả lập.
 
+Với database đã có trước khi bổ sung lưu lỗi phân tích, chạy một lần `apps/api/db/migrations/20261112_analysis_error_message.sql`. Database mới đã có cột này trong `init.sql`.
+
 ### 4. Chạy API và web
 
 Mở ba terminal riêng ở thư mục gốc repository.
@@ -133,7 +135,7 @@ pnpm --filter @fake-news/api test
 ## Cấu hình tùy chọn
 
 - `USE_BULLMQ=false`: chạy job trong tiến trình API, không cần Redis.
-- Đổi thành `USE_BULLMQ=true` để dùng BullMQ; khi đó Redis trong `REDIS_URL` phải sẵn sàng.
+- Đổi thành `USE_BULLMQ=true` để dùng BullMQ với tối đa 3 lần thử lại khi job lỗi; khi đó Redis trong `REDIS_URL` phải sẵn sàng (ví dụ `docker compose up -d redis`). Job đã được đưa vào Redis có thể được BullMQ tiếp tục sau khi API khởi động lại. Chế độ `false` vẫn chạy trực tiếp trong tiến trình và không có retry bền vững.
 - `EVIDENCE_CHECK=true` (mặc định): bật lớp đối chiếu bằng chứng web khi không có mẫu khớp; cần khóa của `LLM_PROVIDER` và nên có `TAVILY_API_KEY` và/hoặc `GOOGLE_FACTCHECK_API_KEY`. Đặt `false` để chỉ dùng dữ liệu + TF-IDF.
 - `RATE_LIMIT_PER_MIN`: số request tối đa mỗi phút cho các endpoint `/api`; mặc định là `10`.
 - `GEMINI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`: tên model được gửi tới provider tương ứng.
