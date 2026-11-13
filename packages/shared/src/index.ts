@@ -83,6 +83,7 @@ export interface DatasetResult {
 export interface AnalysisResult {
   id: string
   status: AnalysisStatus
+  error_message?: string | null
   overall: {
     credibility_score: number
     label: OverallLabel
