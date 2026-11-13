@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS analyses (
   url TEXT,
   content_hash CHAR(64) NOT NULL,
   status ENUM('pending', 'processing', 'completed', 'failed') NOT NULL DEFAULT 'pending',
+  error_message TEXT NULL,
   overall_score FLOAT,
   label VARCHAR(40),
   overall_summary TEXT,
