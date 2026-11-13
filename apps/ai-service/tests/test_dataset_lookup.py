@@ -131,3 +131,18 @@ def test_artifact_decision_threshold_overrides_default(tmp_path, monkeypatch):
     assert lookup.classify("Nội dung khác hoàn toàn", {"min_training_words": 1})["method"] == "unresolved"
     tuned = {"min_training_words": 1, "decision_threshold": 0.65}
     assert lookup.classify("Nội dung khác hoàn toàn", tuned)["method"] == "prediction"
+
+
+def test_unresolved_result_explains_why_the_classifier_gave_no_label(tmp_path, monkeypatch):
+    path = tmp_path / "train.csv"
+    write_samples(path, [
+        {"id": "1", "title": "Bản tin ví dụ", "text": "Nội dung một", "domain": "A", "label": "0"},
+    ])
+    lookup = DatasetLookup([path])
+    short = lookup.classify("Tin ngắn ba từ", {"min_training_words": 80})
+    assert short["method"] == "unresolved"
+    assert short["classifier_skipped"] == {"reason": "too_short", "min_words": 80, "word_count": 4}
+    monkeypatch.setattr("app.dataset_lookup.predict_style", lambda artifact, text: {"label": "fake", "confidence": 0.5})
+    unsure = lookup.classify("Nội dung khác hoàn toàn", {"min_training_words": 1})
+    assert unsure["classifier_skipped"] == {"reason": "low_confidence"}
+    assert lookup.classify("Nội dung khác hoàn toàn", None)["classifier_skipped"] == {"reason": "model_unavailable"}

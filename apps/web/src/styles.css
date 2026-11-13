@@ -253,7 +253,7 @@ h1 em { color: #567b68; font-family: 'Lora', serif; font-weight: 500; }
 .claims-list { margin-top: 12px; border-top: 1px solid var(--line); }
 .claim-item { padding: 16px 0 18px; border-bottom: 1px solid var(--line); }
 .claim-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.claim-index { color: var(--green); font: 500 var(--fs-caption) 'DM Mono', monospace; }
+.claim-index { color: var(--green); font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; }
 .verdict { color: #52635a; font-size: var(--fs-small); font-weight: 600; }
 .verdict-supported { color: #246846; }
 .verdict-refuted { color: #a14d3f; }
@@ -370,3 +370,14 @@ h1 em { color: #567b68; font-family: 'Lora', serif; font-weight: 500; }
 .composer-hint { margin: 6px 0 0; color: #a3372b; font-size: 12.5px; line-height: 1.5; }
 .analysis-form textarea[aria-invalid="true"], .analysis-form input[aria-invalid="true"] { box-shadow: inset 2px 0 0 #a3372b; }
 .retry-button { margin-top: 10px; border: 1px solid currentColor; padding: 6px 12px; border-radius: 999px; background: transparent; font-size: 12.5px; cursor: pointer; }
+
+/* Thanh trên cùng chỉ cần cho nút ☰ ở màn hình ≤ 900px; trên máy tính giữ chỗ trống như cũ. */
+@media (min-width: 901px) {
+  .topbar { visibility: hidden; }
+}
+.field-hint { color: var(--subtle); font-size: var(--fs-caption); font-weight: 400; line-height: 1.5; }
+.notice-message { margin: 14px 0 0; border-left: 2px solid var(--green); border-radius: 0 8px 8px 0; padding: 10px 14px; color: var(--green-strong); background: var(--green-soft); font-size: var(--fs-small); line-height: 1.55; }
+.dismissible { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dismiss-button { flex-shrink: 0; width: 24px; height: 24px; margin: -2px -4px 0 0; border: 0; border-radius: 6px; padding: 0; color: inherit; background: transparent; font-size: 18px; line-height: 1; opacity: .7; }
+.dismiss-button:hover, .dismiss-button:focus-visible { opacity: 1; background: #00000010; }
+.result-hint { color: var(--muted); font-size: var(--fs-small); }

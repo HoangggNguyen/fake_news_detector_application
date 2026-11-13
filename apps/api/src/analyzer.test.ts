@@ -169,3 +169,10 @@ test('Groq failure or fabricated link is explicitly marked unavailable', async (
   assert.equal(invalid.status, 'unavailable')
   assert.equal(invalid.question, null)
 })
+
+test('today is computed in Vietnam time for time-sensitive claims', async () => {
+  const { todayInVietnam } = await import('./analyzer.js')
+  // 18:30 UTC ngày 11/9 đã là 01:30 ngày 12/9 ở Việt Nam.
+  assert.equal(todayInVietnam(new Date('2026-09-11T18:30:00Z')), '12/09/2026')
+  assert.equal(todayInVietnam(new Date('2026-09-11T05:00:00Z')), '11/09/2026')
+})

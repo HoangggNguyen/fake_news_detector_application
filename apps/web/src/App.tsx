@@ -29,10 +29,23 @@ const verdictLabels: Record<string, string> = {
 };
 
 const resultLabels: Record<string, string> = {
-  likely_true: "Nghiêng về được hỗ trợ",
+  likely_true: "Phần lớn nguồn tìm được ủng hộ",
   mixed: "Bằng chứng trái chiều",
-  likely_false: "Nghiêng về bị phản bác",
+  likely_false: "Phần lớn nguồn tìm được bác bỏ",
   insufficient_evidence: "Chưa đủ bằng chứng",
+};
+
+/** Tên giai đoạn hiển thị dưới thanh tiến trình (máy chủ gửi mã tiếng Anh). */
+const stageLabels: Record<string, string> = {
+  pending: "Đang chờ",
+  processing: "Đang xử lý",
+  extract: "Chuẩn bị nội dung",
+  dataset: "Đối chiếu dữ liệu",
+  evidence: "Tìm nguồn trên Internet",
+  response: "Tổng hợp kết quả",
+  save: "Lưu kết quả",
+  completed: "Hoàn tất",
+  failed: "Chưa hoàn tất",
 };
 
 const evidenceTypeLabels: Record<string, string> = {
@@ -42,6 +55,20 @@ const evidenceTypeLabels: Record<string, string> = {
   web_search: "Nguồn tìm kiếm trên web",
   encyclopedia: "Bách khoa tham khảo",
 };
+
+/** Vì sao lớp dữ liệu + mô hình chưa đưa ra nhãn, viết cho người dùng. */
+function unresolvedReason(result: AnalysisResult): string {
+  const skipped = result.dataset_result?.classifier_skipped;
+  if (skipped?.reason === "too_short")
+    return `Nội dung khá ngắn (${skipped.word_count ?? "?"} từ), trong khi mô hình chỉ học các bài từ ${skipped.min_words ?? 80} từ trở lên, nên chưa đánh giá cách viết.`;
+  if (skipped?.reason === "low_confidence")
+    return "Mô hình chưa đủ chắc chắn để dự đoán từ cách viết.";
+  if (skipped?.reason === "conflicting_matches")
+    return "Dữ liệu tham khảo có tin trùng nhưng được ghi nhận khác nhau.";
+  if (skipped?.reason === "model_unavailable")
+    return "Mô hình phân loại tạm thời chưa sẵn sàng.";
+  return "";
+}
 
 function displayTitle(title: string): string {
   return title
@@ -161,7 +188,6 @@ function SampleContent({ sample }: { sample: DatasetSample }) {
     sourceUrl && /^https?:\/\//i.test(sourceUrl) ? sourceUrl : null;
   return (
     <>
-      {!safeUrl}
       <ExpandableText text={sample.text} />
       <p>
         Nguồn:{" "}
@@ -184,7 +210,7 @@ function ClaimsList({ claims }: { claims: AnalysisResult["claims"] }) {
         <article className="claim-item" key={`${claim.text}-${index}`}>
           <div className="claim-heading">
             <span className="claim-index">
-              {String(index + 1).padStart(2, "0")}
+              Ý {index + 1}
             </span>
             <span className={`verdict verdict-${claim.verdict}`}>
               {verdictLabels[claim.verdict] ?? claim.verdict}
@@ -197,9 +223,7 @@ function ClaimsList({ claims }: { claims: AnalysisResult["claims"] }) {
               className="correction-panel"
               aria-label="Thông tin đã chỉnh sửa theo nguồn"
             >
-              <strong>
-                Thông tin này có thể chưa chính xác. Có phải bạn muốn hỏi:
-              </strong>
+              <strong>Theo các nguồn đối chiếu, thông tin đúng có thể là:</strong>
               <p>{claim.correction}</p>
             </aside>
           )}
@@ -232,8 +256,8 @@ function EvidenceSection({ result }: { result: AnalysisResult }) {
   const check = result.dataset_result?.evidence_check;
   if (!check || check.status === "not_needed") return null;
   return (
-    <section className="evidence-section" aria-label="Đối chiếu bằng chứng web">
-      <p className="message-kicker">ĐỐI CHIẾU BẰNG CHỨNG WEB · THAM KHẢO</p>
+    <section className="evidence-section" aria-label="Nguồn trên Internet">
+      <p className="message-kicker">NGUỒN TRÊN INTERNET · THAM KHẢO</p>
       {check.status === "ready" && (
         <>
           <p>
@@ -250,7 +274,8 @@ function EvidenceSection({ result }: { result: AnalysisResult }) {
       )}
       {check.status !== "ready" && (
         <p>
-          {check.message ?? "Đối chiếu bằng chứng web hiện không khả dụng."}
+          {check.message ??
+            "Chức năng tìm nguồn trên Internet tạm thời chưa dùng được."}
         </p>
       )}
     </section>
@@ -285,6 +310,17 @@ export default function App() {
   const [results, setResults] = useState<ConversationAnalysis[]>([]);
   const [history, setHistory] = useState<Conversation[]>([]);
   const [error, setError] = useState("");
+  // Thông báo thành công/trung tính (thay cho hộp alert).
+  const [notice, setNotice] = useState("");
+  // Thông báo trung tính tự tắt sau 5 giây (lỗi thì giữ lại để người dùng kịp đọc).
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  // Phân tích đã thất bại hẳn (khác với mất kết nối theo dõi): nút sẽ là "Gửi lại".
+  const [analysisFailed, setAnalysisFailed] = useState(false);
+  const [submittedMode, setSubmittedMode] = useState<InputMode>("text");
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Tăng giá trị này để mở lại kết nối theo dõi tiến trình (nút "Kiểm tra lại").
@@ -308,6 +344,7 @@ export default function App() {
       `/api/conversations/${id}`,
     );
     setConversationId(id);
+    setNotice("");
     const analyses = body.analyses ?? [];
     const active = analyses.find(
       (item) => item.status === "pending" || item.status === "processing",
@@ -317,6 +354,8 @@ export default function App() {
     );
     if (active) {
       setSubmittedContent(active.input_content);
+      setSubmittedMode(active.input_type);
+      setAnalysisFailed(false);
       setAnalysisId(active.id);
       setProgress({
         stage: active.status,
@@ -390,7 +429,13 @@ export default function App() {
         },
       );
       await loadHistory();
-      window.alert(`Đã chuyển ${body.imported ?? 0} phân tích cũ.`);
+      const imported = body.imported ?? 0;
+      setError("");
+      setNotice(
+        imported > 0
+          ? `Đã chuyển ${imported} phân tích cũ vào tài khoản.`
+          : "Trình duyệt này không có phân tích cũ để chuyển.",
+      );
     } catch (cause) {
       setError(errorMessage(cause, "Không thể chuyển lịch sử."));
     }
@@ -406,6 +451,16 @@ export default function App() {
       finished = true;
       window.clearTimeout(stallTimer);
       stream.close();
+    };
+
+    // Phân tích thất bại hẳn: hiện lý do và đưa nội dung về ô nhập để gửi lại không cần dán.
+    const showFailure = (reason?: string | null) => {
+      setAnalysisFailed(true);
+      setMode(submittedMode);
+      setContent(submittedContent);
+      setError(
+        `Chưa phân tích được nội dung này: ${(reason ?? "đã có lỗi trong lúc phân tích").replace(/\.$/, "")}. Bạn có thể gửi lại.`,
+      );
     };
 
     const openResult = () => {
@@ -427,10 +482,7 @@ export default function App() {
         .then((analysis) => {
           if (analysis.status === "completed") openResult();
           else if (analysis.status === "failed")
-            setError(
-              analysis.error_message ??
-                "Phân tích thất bại. Bạn có thể gửi lại nội dung.",
-            );
+            showFailure(analysis.error_message);
           else setError(reason);
         })
         .catch((cause: unknown) => setError(errorMessage(cause, reason)));
@@ -441,7 +493,7 @@ export default function App() {
       stallTimer = window.setTimeout(
         () =>
           recover(
-            'Chưa nhận được cập nhật tiến trình trong thời gian dài. Bấm "Kiểm tra lại" để xem kết quả.',
+            'Lâu rồi chưa nhận được tin từ hệ thống. Bấm "Kiểm tra lại" để xem kết quả.',
           ),
         PROGRESS_STALL_MS,
       );
@@ -458,6 +510,8 @@ export default function App() {
         // Bỏ qua gói tin tiến trình sai định dạng, giữ trạng thái hiện tại.
       }
     });
+    // Máy chủ gửi "ping" mỗi 5 giây khi vẫn đang xử lý (ví dụ chờ LLM).
+    stream.addEventListener("ping", resetStallTimer);
     stream.addEventListener("complete", () => {
       finish();
       openResult();
@@ -474,7 +528,7 @@ export default function App() {
       } catch {
         message = undefined;
       }
-      setError(message ?? "Phân tích thất bại.");
+      showFailure(message);
     });
     // EventSource tự kết nối lại khi mạng chập chờn; chỉ xử lý khi trình duyệt đã bỏ cuộc (CLOSED).
     stream.onerror = () => {
@@ -489,6 +543,7 @@ export default function App() {
       window.clearTimeout(stallTimer);
       stream.close();
     };
+    // submittedContent/submittedMode chỉ được đọc khi thất bại, không cần mở lại luồng khi chúng đổi.
   }, [analysisId, conversationId, view, progressAttempt]);
 
   async function submitAnalysis(event?: React.FormEvent<HTMLFormElement>) {
@@ -502,6 +557,8 @@ export default function App() {
       return;
     setBusy(true);
     setError("");
+    setNotice("");
+    setAnalysisFailed(false);
     try {
       let activeConversation = conversationId;
       if (!activeConversation) {
@@ -527,6 +584,7 @@ export default function App() {
       );
       if (!body.id) throw new Error("missing analysis id");
       setSubmittedContent(submitted);
+      setSubmittedMode(mode);
       setContent("");
       setAnalysisId(body.id);
       if (body.status === "completed") {
@@ -534,7 +592,7 @@ export default function App() {
       } else {
         setProgress({
           stage: "pending",
-          message: "Đã nhận nội dung, đang xếp lịch phân tích",
+          message: "Đã nhận nội dung, đang bắt đầu phân tích",
           progress: 2,
         });
         setView("progress");
@@ -551,6 +609,7 @@ export default function App() {
   ) {
     if (
       event.key !== "Enter" ||
+      event.shiftKey ||
       event.altKey ||
       event.nativeEvent.isComposing ||
       event.repeat
@@ -562,6 +621,7 @@ export default function App() {
 
   async function showHistory() {
     setError("");
+    setNotice("");
     setView("history");
     try {
       await loadHistory();
@@ -588,9 +648,18 @@ export default function App() {
               onChange={(event) => setUsername(event.target.value)}
               minLength={3}
               maxLength={80}
+              pattern="[a-zA-Z0-9_.\-]+"
               required
               autoComplete="username"
+              aria-describedby={
+                authMode === "register" ? "username-rule" : undefined
+              }
             />
+            {authMode === "register" && (
+              <small id="username-rule" className="field-hint">
+                3–80 ký tự: chữ không dấu, số và . _ -
+              </small>
+            )}
           </label>
           <label>
             Mật khẩu
@@ -604,7 +673,15 @@ export default function App() {
               autoComplete={
                 authMode === "login" ? "current-password" : "new-password"
               }
+              aria-describedby={
+                authMode === "register" ? "password-rule" : undefined
+              }
             />
+            {authMode === "register" && (
+              <small id="password-rule" className="field-hint">
+                Mật khẩu từ 8 ký tự trở lên
+              </small>
+            )}
           </label>
           {error && (
             <p className="error-message" role="alert">
@@ -647,6 +724,8 @@ export default function App() {
             setResults([]);
             setContent("");
             setError("");
+            setNotice("");
+            setAnalysisFailed(false);
             setSidebarOpen(false);
           }}
         >
@@ -693,13 +772,21 @@ export default function App() {
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      {/* <header className="topbar">
-        <button className="menu-button" type="button" onClick={() => setSidebarOpen(!sidebarOpen)} aria-expanded={sidebarOpen}>☰</button>
-        <span className="topbar-title">{view === 'history' ? 'Lịch sử phân tích' : 'Không gian kiểm chứng'}</span>
-        { <nav className="topbar-actions" aria-label="Điều hướng chính">
-          <button type="button" onClick={() => { setView('compose'); setConversationId(''); setResults([]); setError('') }}>Phân tích mới</button>
-        </nav> }
-      </header> */}
+      {/* Chỉ hiện ở màn hình ≤ 900px, nơi sidebar bị giấu thành ngăn kéo. */}
+      <header className="topbar">
+        <button
+          className="menu-button"
+          type="button"
+          aria-label="Mở thanh điều hướng"
+          aria-expanded={sidebarOpen}
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+        >
+          ☰
+        </button>
+        <span className="topbar-title">
+          {view === "history" ? "Lịch sử kiểm chứng" : "NEWSROOM / LAB"}
+        </span>
+      </header>
 
       <section
         className={`workspace ${view === "compose" ? "workspace-compose" : ""}`}
@@ -709,12 +796,10 @@ export default function App() {
           <>
             <div className="intro welcome-block">
               <p className="eyebrow">NEWSROOM / LAB</p>
-              <h1 id="page-title">
-                Mình cùng kiểm chứng nhé
-              </h1>
+              <h1 id="page-title">Kiểm chứng thông tin</h1>
               <p className="intro-copy">
-                Gửi một thông tin hoặc chủ đề, mình sẽ tìm nội dung liên quan để
-                cùng bạn xem xét.
+                Dán đoạn tin hoặc đường dẫn bài viết. Hệ thống sẽ đối chiếu với
+                dữ liệu đã học và tìm nguồn trên Internet để bạn tham khảo.
               </p>
             </div>
             <div className="workflow" aria-label="Quy trình phân tích">
@@ -763,25 +848,26 @@ export default function App() {
                           <>
                             <p className="result-summary">
                               {result.dataset_result.method === "match"
-                                ? `Đã tìm thấy thông tin trùng khớp trong dữ liệu tham khảo. Kết quả cho thấy đây là ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"}.`
+                                ? `Đã tìm thấy tin trùng khớp trong dữ liệu tham khảo, nơi tin này được ghi nhận là ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"}.`
                                 : result.dataset_result.method === "prediction"
-                                  ? `Dựa trên kết quả phân tích của mô hình AI, thông tin này được đánh giá là ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"}.`
+                                  ? `Cách viết của nội dung này giống các ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"} mà mô hình đã học. Đây là dự đoán, chưa phải kết luận đã kiểm chứng.`
                                   : result.dataset_result.overall_basis ===
                                       "evidence"
-                                    ? `Chưa tìm thấy thông tin trùng khớp trong dữ liệu tham khảo. Qua việc tìm kiếm và đối chiếu các nguồn trên Internet, kết quả cho thấy: ${resultLabels[result.overall.label] ?? result.overall.label}. Kết quả chỉ mang tính tham khảo.`
-                                    : "Chưa tìm thấy đủ thông tin phù hợp để xác định nội dung này là tin thật hay tin giả."}
+                                    ? `Chưa có tin trùng khớp trong dữ liệu tham khảo. ${unresolvedReason(result)} Theo các nguồn tìm được trên Internet: ${(resultLabels[result.overall.label] ?? result.overall.label).toLocaleLowerCase("vi-VN")}. Kết quả chỉ để tham khảo.`
+                                    : `Chưa đủ căn cứ để xác định nội dung này là tin thật hay tin giả. ${unresolvedReason(result)}`}
                             </p>
 
-                            {result.dataset_result.follow_up?.question && (
-                              <p>{result.dataset_result.follow_up.question}</p>
-                            )}
-
-                            {result.dataset_result.follow_up?.status ===
-                              "unavailable" && (
-                              <p>
-                                Hiện chưa thể hỗ trợ phân tích thêm nội dung
-                                này. Bạn có thể cung cấp thêm thông tin để hệ
-                                thống xem xét cụ thể hơn.
+                            {/* Câu hỏi gợi ý của Groq không còn hiển thị: hệ thống không dùng câu trả lời
+                                của người dùng (mỗi lần gửi được phân tích độc lập), nên thay bằng hướng dẫn cố định. */}
+                            {result.dataset_result.method === "unresolved" && (
+                              <p className="result-hint">
+                                Để kiểm tra kỹ hơn, bạn có thể dán toàn văn bài
+                                viết (từ{" "}
+                                {result.dataset_result.classifier_skipped
+                                  ?.min_words ?? 80}{" "}
+                                từ) hoặc đường dẫn bài gốc ở ô bên dưới. Mỗi
+                                lần gửi được phân tích riêng, không ghép với
+                                tin trước.
                               </p>
                             )}
 
@@ -815,8 +901,8 @@ export default function App() {
                                       <p>
                                         {displayTitle(sample.title)} —{" "}
                                         {sample.label === "real"
-                                          ? "nhãn tin thật"
-                                          : "nhãn tin giả"}
+                                          ? "được ghi nhận là tin thật"
+                                          : "được ghi nhận là tin giả"}
                                       </p>
                                       <SampleContent sample={sample} />
                                     </article>
@@ -824,7 +910,6 @@ export default function App() {
                                 )}
                               </section>
                             )}
-                            {!result.dataset_result.suggestions.length}
                             <EvidenceSection result={result} />
                           </>
                         ) : (
@@ -852,7 +937,7 @@ export default function App() {
                     ) : (
                       <p>
                         {result.status === "failed"
-                          ? result.error_message ?? "Phân tích thất bại."
+                          ? `Chưa phân tích được nội dung này: ${(result.error_message ?? "đã có lỗi trong lúc phân tích").replace(/\.$/, "")}. Bạn có thể gửi lại.`
                           : "Đang xử lý phân tích."}
                       </p>
                     )}
@@ -882,7 +967,7 @@ export default function App() {
                       value={progress.progress}
                     />
                     <div className="progress-meta">
-                      <span>{progress.stage}</span>
+                      <span>{stageLabels[progress.stage] ?? "Đang xử lý"}</span>
                       <span>{progress.progress}%</span>
                     </div>
                     {error && (
@@ -890,7 +975,17 @@ export default function App() {
                         {error}
                       </p>
                     )}
-                    {error && (
+                    {error && analysisFailed && (
+                      <button
+                        className="retry-button"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void submitAnalysis()}
+                      >
+                        Gửi lại
+                      </button>
+                    )}
+                    {error && !analysisFailed && (
                       <button
                         className="retry-button"
                         type="button"
@@ -1019,7 +1114,6 @@ export default function App() {
               </p>
             )}
             <div className="form-footer">
-              {/* <span>{mode === 'text' ? `${content.length.toLocaleString('vi-VN')} / 100.000 ký tự · Enter gửi · Alt+Enter xuống dòng` : 'Chỉ hỗ trợ bài viết HTTP(S) công khai'} · Nội dung chưa khớp có thể được gửi tới Groq để tạo câu hỏi.</span> */}
               <button
                 className="submit-button"
                 type="submit"
@@ -1033,9 +1127,30 @@ export default function App() {
         )}
 
         {error && view !== "progress" && (
-          <p className="error-message" role="alert">
-            {error}
-          </p>
+          <div className="error-message dismissible" role="alert">
+            <span>{error}</span>
+            <button
+              type="button"
+              className="dismiss-button"
+              aria-label="Đóng thông báo"
+              onClick={() => setError("")}
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {notice && !error && (
+          <div className="notice-message dismissible" role="status">
+            <span>{notice}</span>
+            <button
+              type="button"
+              className="dismiss-button"
+              aria-label="Đóng thông báo"
+              onClick={() => setNotice("")}
+            >
+              ×
+            </button>
+          </div>
         )}
       </section>
 

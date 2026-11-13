@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
@@ -20,6 +20,7 @@ import {
   type EvidenceAnalysis,
 } from "./hybrid.js";
 import { authRouter, requireAuth, type AuthenticatedRequest } from "./auth.js";
+import { publicMessage, UserFacingError } from "./errors.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -113,13 +114,43 @@ app.use("/api", (request, response, next) => {
 });
 app.use("/api/auth", authRouter);
 
+type ProgressPayload = { stage: string; message: string; progress: number };
+/** Cập nhật gần nhất của mỗi phân tích, để luồng SSE mở lại giữa chừng không bắt đầu từ 0%. */
+const lastProgress = new Map<string, ProgressPayload>();
+
 function sendProgress(
   analysisId: string,
   stage: string,
   message: string,
   progress: number,
 ) {
-  progressEvents.emit(analysisId, { stage, message, progress });
+  const payload = { stage, message, progress };
+  if (progress >= 100) lastProgress.delete(analysisId);
+  else lastProgress.set(analysisId, payload);
+  progressEvents.emit(analysisId, payload);
+}
+
+async function markFailed(analysisId: string, message: string) {
+  await pool
+    .execute("UPDATE analyses SET status = ?, error_message = ? WHERE id = ?", [
+      "failed",
+      message.slice(0, 500),
+      analysisId,
+    ])
+    .catch(async (error: unknown) => {
+      console.error(
+        "Could not store failure reason (run migration 20261112?):",
+        error instanceof Error ? error.message : error,
+      );
+      // Vẫn phải đánh dấu failed để giao diện không chờ mãi.
+      await pool
+        .execute("UPDATE analyses SET status = ? WHERE id = ?", [
+          "failed",
+          analysisId,
+        ])
+        .catch(() => undefined);
+    });
+  sendProgress(analysisId, "failed", message, 100);
 }
 
 async function processAnalysis(
@@ -134,29 +165,49 @@ async function processAnalysis(
     const analysis = rows[0];
     if (!analysis || analysis.status === "completed") return;
 
-    await pool.execute(
-      "UPDATE analyses SET status = ?, error_message = NULL WHERE id = ?",
-      ["processing", analysisId],
-    );
-    sendProgress(analysisId, "extract", "Đang chuẩn bị nội dung", 10);
+    await pool.execute("UPDATE analyses SET status = ? WHERE id = ?", [
+      "processing",
+      analysisId,
+    ]);
+    sendProgress(analysisId, "extract", "Đang đọc nội dung bạn gửi", 10);
     let content = String(analysis.input_text);
     let sourceUrl: string | null = analysis.url ? String(analysis.url) : null;
-    let articleTitle: string | null = null;
     if (analysis.input_type === "url") {
-      const extracted = await extractArticle(String(analysis.url));
+      const extracted = await extractArticle(String(analysis.url)).catch(
+        (error: unknown) => {
+          if (error instanceof UserFacingError) throw error;
+          console.warn(
+            "Article download failed:",
+            error instanceof Error ? error.message : error,
+          );
+          throw new UserFacingError(
+            "Không tải được bài viết từ đường dẫn này. Bạn có thể dán trực tiếp nội dung bài.",
+          );
+        },
+      );
       content = extracted.text;
       sourceUrl = extracted.url;
-      articleTitle = extracted.title;
     }
 
     // Lớp 1: tra mẫu trong dữ liệu train + classifier TF-IDF (kết quả chính).
     sendProgress(
       analysisId,
       "dataset",
-      "Đang đối chiếu với dữ liệu tham khảo",
+      "Đang so sánh với các tin đã có trong dữ liệu",
       25,
     );
-    const datasetResult = await classifyDataset(content, aiServiceUrl);
+    const datasetResult = await classifyDataset(content, aiServiceUrl).catch(
+      (error: unknown) => {
+        if (error instanceof UserFacingError) throw error;
+        console.error(
+          "AI service unreachable:",
+          error instanceof Error ? error.message : error,
+        );
+        throw new UserFacingError(
+          "Bộ phân tích dữ liệu đang tạm thời chưa sẵn sàng.",
+        );
+      },
+    );
 
     // Lớp 2: tách tuyên bố + tìm bằng chứng web bằng LLM (tham khảo, chỉ khi chưa có mẫu khớp).
     let evidenceCheck = shouldCheckEvidence(datasetResult);
@@ -165,18 +216,25 @@ async function processAnalysis(
       sendProgress(
         analysisId,
         "evidence",
-        "Chưa tìm thấy thông tin phù hợp, hệ thống đang tìm kiếm các nguồn xác minh trên Internet.",
+        "Chưa có tin trùng khớp trong dữ liệu, đang tìm nguồn trên Internet",
         45,
       );
       const outcome = await runEvidenceCheck(() =>
-        analyzeContent(content, sourceUrl, articleTitle),
+        analyzeContent(content, sourceUrl, (message, progress) =>
+          sendProgress(analysisId, "evidence", message, progress),
+        ),
       );
       evidenceCheck = outcome.check;
       evidence = outcome.evidence;
     }
 
-    sendProgress(analysisId, "response", "Đang chuẩn bị câu trả lời", 75);
-    const followUp = await makeFollowUp(content, datasetResult);
+    sendProgress(analysisId, "response", "Đang tổng hợp kết quả", 75);
+    // Câu hỏi gợi ý của Groq mặc định TẮT: câu trả lời của người dùng không được ghép vào
+    // phân tích trước, nên câu hỏi dễ gây hiểu lầm. Bật lại bằng FOLLOW_UP_QUESTION=true.
+    const followUp =
+      process.env.FOLLOW_UP_QUESTION === "true"
+        ? await makeFollowUp(content, datasetResult)
+        : { question: null, status: "not_needed" as const };
     const overall = combineResults(datasetResult, evidence);
     const result = aiResultSchema.parse({
       overall: {
@@ -192,7 +250,7 @@ async function processAnalysis(
       },
       disclaimer: "",
     });
-    sendProgress(analysisId, "save", "Đang lưu kết quả", 85);
+    sendProgress(analysisId, "save", "Sắp xong, đang lưu kết quả", 85);
 
     const connection = await pool.getConnection();
     try {
@@ -279,26 +337,11 @@ async function processAnalysis(
     } finally {
       connection.release();
     }
-    sendProgress(analysisId, "completed", "Phân tích hoàn tất", 100);
+    sendProgress(analysisId, "completed", "Đã phân tích xong", 100);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Phân tích thất bại.";
-    await pool
-      .execute(
-        "UPDATE analyses SET status = ?, error_message = ? WHERE id = ?",
-        [options.willRetry ? "pending" : "failed", message.slice(0, 1000), analysisId],
-      )
-      .catch(() => undefined);
-    if (options.willRetry) {
-      sendProgress(
-        analysisId,
-        "retrying",
-        "Lần xử lý này gặp lỗi tạm thời; hệ thống sẽ tự thử lại.",
-        85,
-      );
-      throw error;
-    }
-    sendProgress(analysisId, "failed", message, 100);
+    // Ghi đầy đủ lỗi vào log; người dùng chỉ thấy thông điệp đã viết sẵn.
+    console.error(`Analysis ${analysisId} failed:`, error);
+    await markFailed(analysisId, publicMessage(error));
   }
 }
 
@@ -329,29 +372,10 @@ if (process.env.USE_BULLMQ === "true") {
 function dispatchAnalysis(analysisId: string) {
   if (analysisQueue) {
     void analysisQueue
-      .add("analyze", { analysisId }, {
-        jobId: analysisId,
-        attempts: maxAnalysisAttempts,
-        backoff: { type: "exponential", delay: 2_000 },
-        removeOnComplete: 500,
-        removeOnFail: 1_000,
-      })
-      .catch(async () => {
-        const message =
-          "Không thể đưa phân tích vào hàng đợi. Hãy kiểm tra Redis và cấu hình USE_BULLMQ.";
-        console.error("Enqueuing analysis failed:", analysisId);
-        await pool
-          .execute(
-            "UPDATE analyses SET status = ?, error_message = ? WHERE id = ?",
-            ["failed", message, analysisId],
-          )
-          .catch(() => undefined);
-        sendProgress(
-          analysisId,
-          "failed",
-          message,
-          100,
-        );
+      .add("analyze", { analysisId }, { jobId: analysisId })
+      .catch(async (error: unknown) => {
+        console.error("Could not enqueue analysis in Redis:", error);
+        await markFailed(analysisId, "Hệ thống đang quá tải.");
       });
   } else {
     void processAnalysis(analysisId);
@@ -460,7 +484,10 @@ async function getAnalysis(analysisId: string, userId: string) {
   return {
     id: analysis.id,
     status: analysis.status,
-    error_message: analysis.error_message ? String(analysis.error_message) : null,
+    error_message:
+      analysis.status === "failed"
+        ? (analysis.error_message ?? "Đã có lỗi trong lúc phân tích.")
+        : null,
     overall:
       analysis.overall_score === null
         ? null
@@ -502,7 +529,9 @@ app.use("/api", requireAuth);
 app.get("/api/conversations", async (request, response) => {
   try {
     const [rows] = await pool.execute<RowDataPacket[]>(
-      "SELECT id, title, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC, id DESC",
+      // Bỏ qua cuộc trò chuyện rỗng: web tạo cuộc trò chuyện trước rồi mới lưu nội dung,
+      // nên nếu bước lưu thất bại sẽ còn sót một "Cuộc trò chuyện mới" không có lượt nào.
+      "SELECT c.id, c.title, c.created_at, c.updated_at FROM conversations c WHERE c.user_id = ? AND EXISTS (SELECT 1 FROM analyses a WHERE a.conversation_id = c.id) ORDER BY c.updated_at DESC, c.id DESC",
       [getUserId(request)],
     );
     response.json({ conversations: rows });
@@ -617,9 +646,6 @@ app.post("/api/analyses", async (request, response) => {
   }
 
   const { type, content, conversation_id: conversationId } = parsed.data;
-  const contentHash = createHash("sha256")
-    .update(`${type}:${content}`)
-    .digest("hex");
   try {
     const [owned] = await pool.execute<RowDataPacket[]>(
       "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
@@ -631,7 +657,7 @@ app.post("/api/analyses", async (request, response) => {
     }
     const analysisId = randomUUID();
     await pool.execute(
-      "INSERT INTO analyses (id, session_id, conversation_id, input_type, input_text, url, content_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO analyses (id, session_id, conversation_id, input_type, input_text, url, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [
         analysisId,
         getUserId(request),
@@ -639,7 +665,6 @@ app.post("/api/analyses", async (request, response) => {
         type,
         content,
         type === "url" ? content : null,
-        contentHash,
         "pending",
       ],
     );
@@ -649,12 +674,14 @@ app.post("/api/analyses", async (request, response) => {
     );
     response.status(202).json({ id: analysisId, status: "pending" });
     dispatchAnalysis(analysisId);
-  } catch {
-    response
-      .status(503)
-      .json({
-        error: "Cơ sở dữ liệu chưa sẵn sàng. Kiểm tra DATABASE_URL và MySQL.",
-      });
+  } catch (error) {
+    console.error(
+      "Creating analysis failed (check DATABASE_URL / MySQL):",
+      error instanceof Error ? error.message : error,
+    );
+    response.status(503).json({
+      error: "Hệ thống chưa lưu được yêu cầu. Vui lòng thử lại sau ít phút.",
+    });
   }
 });
 
@@ -666,11 +693,7 @@ app.get("/api/analyses", async (request, response) => {
     );
     response.json({ analyses: rows });
   } catch {
-    response
-      .status(503)
-      .json({
-        error: "Không thể tải lịch sử khi cơ sở dữ liệu chưa sẵn sàng.",
-      });
+    response.status(503).json({ error: "Không thể tải lịch sử." });
   }
 });
 
@@ -724,11 +747,14 @@ app.get("/api/analyses/:id/stream", async (request, response) => {
     }
   };
   progressEvents.on(analysisId, onProgress);
-  send("progress", {
-    stage: rows[0].status,
-    message: "Đang chờ cập nhật",
-    progress: 0,
-  });
+  send(
+    "progress",
+    lastProgress.get(analysisId) ?? {
+      stage: rows[0].status,
+      message: "Đang chờ cập nhật",
+      progress: 0,
+    },
+  );
   if (["completed", "failed"].includes(String(rows[0].status))) {
     onProgress({
       stage: String(rows[0].status),
@@ -741,7 +767,9 @@ app.get("/api/analyses/:id/stream", async (request, response) => {
     });
   }
   const heartbeat = setInterval(() => {
-    response.write(": keep-alive\n\n");
+    // Sự kiện "ping" thật (không phải dòng comment) để web biết máy chủ vẫn đang xử lý,
+    // kể cả khi một lần gọi LLM kéo dài hơn bộ đếm chờ phía trình duyệt.
+    send("ping", { at: Date.now() });
     void pool
       .execute<RowDataPacket[]>(
         "SELECT a.status, a.error_message FROM analyses a JOIN conversations c ON c.id = a.conversation_id WHERE a.id = ? AND c.user_id = ?",
@@ -810,9 +838,26 @@ app.use(
     response: Response,
     _next: (error?: unknown) => void,
   ) => {
+    const type =
+      typeof error === "object" && error !== null && "type" in error
+        ? String((error as { type?: unknown }).type)
+        : "";
+    if (type === "entity.too.large") {
+      response
+        .status(413)
+        .json({ error: "Nội dung quá dài. Vui lòng rút gọn rồi gửi lại." });
+      return;
+    }
+    if (type === "entity.parse.failed") {
+      response
+        .status(400)
+        .json({ error: "Dữ liệu gửi lên không đúng định dạng." });
+      return;
+    }
+    console.error("Unhandled request error:", error);
     response
-      .status(400)
-      .json({ error: error instanceof Error ? error.message : "Lỗi máy chủ." });
+      .status(500)
+      .json({ error: "Máy chủ gặp lỗi. Vui lòng thử lại sau ít phút." });
   },
 );
 

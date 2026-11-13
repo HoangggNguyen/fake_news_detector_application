@@ -5,6 +5,7 @@ import { get as httpsGet } from 'node:https'
 import { isIP, type LookupFunction } from 'node:net'
 import { JSDOM } from 'jsdom'
 import { Readability } from '@mozilla/readability'
+import { UserFacingError } from './errors.js'
 
 const maxArticleBytes = 1_000_000
 const maxRedirects = 3
@@ -32,12 +33,12 @@ export function isPrivateAddress(address: string): boolean {
 async function assertPublicUrl(value: string): Promise<{ url: URL; addresses: LookupAddress[] }> {
   const url = new URL(value)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
-    throw new Error('Chỉ chấp nhận URL HTTP(S) công khai.')
+    throw new UserFacingError('Chỉ hỗ trợ đường dẫn http:// hoặc https:// công khai.')
   }
 
   const addresses = await lookup(url.hostname, { all: true, verbatim: true })
   if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
-    throw new Error('URL trỏ đến địa chỉ mạng không được phép.')
+    throw new UserFacingError('Đường dẫn trỏ tới địa chỉ mạng nội bộ nên không được phép.')
   }
   return { url, addresses }
 }
@@ -72,7 +73,7 @@ function downloadPage(url: URL, addresses: LookupAddress[]): Promise<{
     const request = transport(url, requestOptions, (response) => {
       const declaredLength = Number(response.headers['content-length'] ?? 0)
       if (declaredLength > maxArticleBytes) {
-        request.destroy(new Error('Bài viết vượt quá giới hạn 1 MB.'))
+        request.destroy(new UserFacingError('Bài viết vượt quá giới hạn 1 MB.'))
         return
       }
       const chunks: Buffer[] = []
@@ -81,7 +82,7 @@ function downloadPage(url: URL, addresses: LookupAddress[]): Promise<{
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
         size += buffer.byteLength
         if (size > maxArticleBytes) {
-          request.destroy(new Error('Bài viết vượt quá giới hạn 1 MB.'))
+          request.destroy(new UserFacingError('Bài viết vượt quá giới hạn 1 MB.'))
           return
         }
         chunks.push(buffer)
@@ -93,7 +94,7 @@ function downloadPage(url: URL, addresses: LookupAddress[]): Promise<{
       }))
       response.on('error', reject)
     })
-    request.setTimeout(10_000, () => request.destroy(new Error('Hết thời gian tải bài viết.')))
+    request.setTimeout(10_000, () => request.destroy(new UserFacingError('Hết thời gian tải bài viết.')))
     request.on('error', reject)
   })
 }
@@ -106,16 +107,17 @@ export async function extractArticle(sourceUrl: string): Promise<{ text: string;
     response = await downloadPage(safeUrl, addresses)
     if (![301, 302, 303, 307, 308].includes(response.statusCode)) break
     const location = response.headers.location
-    if (!location || redirectCount === maxRedirects) throw new Error('URL chuyển hướng quá số lần cho phép.')
+    if (!location || redirectCount === maxRedirects) throw new UserFacingError('Đường dẫn chuyển hướng quá nhiều lần.')
     currentUrl = new URL(location, safeUrl).toString()
   }
 
   if (!response || response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(`Không tải được bài viết (HTTP ${response?.statusCode ?? 'unknown'}).`)
+    console.warn(`Article download returned HTTP ${response?.statusCode ?? 'unknown'}`)
+    throw new UserFacingError('Trang web không cho tải bài viết này. Bạn có thể dán trực tiếp nội dung bài.')
   }
   const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
   if (!contentType.includes('text/html') && !contentType.startsWith('text/plain')) {
-    throw new Error('URL không trả về nội dung HTML hoặc văn bản.')
+    throw new UserFacingError('Đường dẫn này không phải trang bài viết (không có nội dung HTML hoặc văn bản).')
   }
   const body = response.body
   if (contentType.startsWith('text/plain')) return { text: body.slice(0, 100_000), url: currentUrl, title: null }
@@ -123,6 +125,6 @@ export async function extractArticle(sourceUrl: string): Promise<{ text: string;
   const document = new JSDOM(body, { url: currentUrl }).window.document
   const article = new Readability(document).parse()
   const text = article?.textContent?.replace(/\s+/g, ' ').trim()
-  if (!text) throw new Error('Không trích xuất được nội dung bài viết.')
+  if (!text) throw new UserFacingError('Không trích xuất được nội dung bài viết.')
   return { text: text.slice(0, 100_000), url: currentUrl, title: article?.title?.trim() || null }
 }

@@ -1,12 +1,9 @@
 fastapi
 uvicorn[standard]
-pydantic-settings
 python-dotenv
+# httpx: cần cho fastapi.testclient khi chạy pytest
 httpx
 scikit-learn
-scipy
 numpy
+pandas
 joblib
-underthesea
-google-genai
-groq
