@@ -109,6 +109,17 @@ export class HttpStatusError extends Error {
   }
 }
 
+/** Mô tả lỗi cho log, gồm cả nguyên nhân gốc của "fetch failed" (ECONNRESET, ETIMEDOUT, lỗi chứng chỉ...). */
+export function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error) {
+    const code = (cause as Error & { code?: string }).code;
+    return `${error.message}: ${code ? `${code} ` : ""}${cause.message}`;
+  }
+  return error.message;
+}
+
 /** Thiếu khóa API hoặc cấu hình sai: chức năng tìm nguồn coi như chưa được bật. */
 export class ConfigurationError extends Error {
   constructor(message: string) {
@@ -150,8 +161,8 @@ const LLM_TIMEOUT_MS = 60_000;
 export async function withRetry<T>(
   run: () => Promise<T>,
   {
-    attempts = 3,
-    baseDelayMs = 2_000,
+    attempts = 4,
+    baseDelayMs = 3_000,
     sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   } = {},
 ): Promise<T> {
@@ -159,16 +170,11 @@ export async function withRetry<T>(
     try {
       return await run();
     } catch (error) {
-      const retryable =
-        error instanceof HttpStatusError
-          ? error.status === 429 || error.status >= 500
-          : error instanceof Error &&
-            // Hết thời gian chờ, hoặc mạng chập chờn (fetch failed: ECONNRESET, ETIMEDOUT...).
-            (error.name === "TimeoutError" ||
-              (error.name === "TypeError" && error.message === "fetch failed"));
+      // Quá tải (429, 5xx), hết thời gian chờ, hoặc mạng chập chờn (fetch failed: ECONNRESET...).
+      const retryable = isRetryable(error);
       if (!retryable || attempt >= attempts) throw error;
       console.warn(
-        `LLM request failed (${error instanceof Error ? error.message : error}); retry ${attempt}/${attempts - 1}`,
+        `LLM request failed (${describeError(error)}); retry ${attempt}/${attempts - 1}`,
       );
       const requested =
         error instanceof HttpStatusError && error.retryAfterSeconds
@@ -195,12 +201,45 @@ function llmJson<T>(url: string | URL, init?: RequestInit): Promise<T> {
   return responseJson<T>(url, init, LLM_TIMEOUT_MS, "LLM");
 }
 
-async function askModel(prompt: string): Promise<string> {
-  return withRetry(() => askModelOnce(prompt));
+function isRetryable(error: unknown): boolean {
+  return error instanceof HttpStatusError
+    ? error.status === 429 || error.status >= 500
+    : error instanceof Error &&
+        (error.name === "TimeoutError" ||
+          (error.name === "TypeError" && error.message === "fetch failed"));
 }
 
-async function askModelOnce(prompt: string): Promise<string> {
-  const provider = (process.env.LLM_PROVIDER ?? "gemini").toLowerCase();
+/**
+ * Nhà cung cấp dự phòng khi nhà cung cấp chính lỗi mạng/quá tải: LLM_FALLBACK_PROVIDER nếu có,
+ * nếu không thì tự chọn Gemini <-> Groq khi có khóa. Đặt LLM_FALLBACK_PROVIDER=none để tắt.
+ */
+export function fallbackProvider(
+  primary: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const configured = env.LLM_FALLBACK_PROVIDER?.trim().toLowerCase();
+  if (configured === "none") return null;
+  if (configured) return configured === primary ? null : configured;
+  if (primary === "gemini" && env.GROQ_API_KEY) return "groq";
+  if (primary === "groq" && env.GEMINI_API_KEY) return "gemini";
+  return null;
+}
+
+async function askModel(prompt: string): Promise<string> {
+  const primary = (process.env.LLM_PROVIDER ?? "gemini").toLowerCase();
+  try {
+    return await withRetry(() => askModelOnce(prompt, primary));
+  } catch (error) {
+    const fallback = fallbackProvider(primary);
+    if (!fallback || !isRetryable(error)) throw error;
+    console.warn(
+      `LLM ${primary} unavailable (${describeError(error)}); switching to ${fallback}`,
+    );
+    return withRetry(() => askModelOnce(prompt, fallback));
+  }
+}
+
+async function askModelOnce(prompt: string, provider: string): Promise<string> {
   if (provider === "gemini") {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new ConfigurationError("GEMINI_API_KEY is missing");

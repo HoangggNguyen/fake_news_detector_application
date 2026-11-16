@@ -1,5 +1,5 @@
 import type { DatasetResult } from './dataset.js'
-import { ConfigurationError, type analyzeContent } from './analyzer.js'
+import { ConfigurationError, describeError, type analyzeContent } from './analyzer.js'
 
 export type EvidenceAnalysis = Awaited<ReturnType<typeof analyzeContent>>
 
@@ -38,7 +38,7 @@ export async function runEvidenceCheck(
     return { check: { status: 'ready', message: null }, evidence }
   } catch (error) {
     // Chi tiết kỹ thuật (thiếu khóa, HTTP 503, timeout...) chỉ ghi log.
-    console.warn('Evidence check unavailable:', error instanceof Error ? error.message : error)
+    console.warn('Evidence check unavailable:', describeError(error))
     const message = error instanceof ConfigurationError
       ? 'Chức năng tìm nguồn trên Internet chưa được bật trên hệ thống này.'
       : 'Chức năng tìm nguồn trên Internet tạm thời chưa dùng được. Bạn có thể thử lại sau ít phút.'

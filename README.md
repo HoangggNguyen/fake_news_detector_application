@@ -141,6 +141,7 @@ pnpm --filter @fake-news/api test
 - `MAX_CLAIMS` (mặc định `5`, tối đa `8`): số tuyên bố được tìm nguồn trong một lần phân tích. Mỗi tuyên bố dùng 1 lượt Tavily, nên một lần phân tích tốn tối đa `MAX_CLAIMS` lượt.
 - `RATE_LIMIT_PER_MIN`: số request tối đa mỗi phút cho `POST /api/auth/login`, `POST /api/auth/register` và `POST /api/analyses` (các endpoint khác không bị giới hạn); mặc định là `10`.
 - `GEMINI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`: tên model được gửi tới provider tương ứng.
+- `LLM_FALLBACK_PROVIDER`: nhà cung cấp dự phòng khi nhà cung cấp chính lỗi mạng (ECONNRESET), quá tải (429/5xx) hoặc hết thời gian chờ sau 4 lần thử. Để trống thì tự chuyển Gemini ↔ Groq nếu có khóa; `none` để tắt. Mỗi lần sửa `.env` cần khởi động lại API.
 - `PORT`: cổng API, mặc định `3000`.
 
 ## Huấn luyện classifier (tùy chọn)

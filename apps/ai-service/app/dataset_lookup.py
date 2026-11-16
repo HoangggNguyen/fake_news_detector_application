@@ -17,6 +17,8 @@ TITLE_SUFFIX = re.compile(r"\s*\((?:Mẫu|Cập nhật đợt|Cảnh báo mẫu)
 # Ngưỡng mặc định khi artifact chưa có decision_threshold (chọn bằng app.tune_threshold).
 DEFAULT_DECISION_THRESHOLD = 0.9
 TITLE_CATEGORY = re.compile(r"^\s*\[[^\]]+\]\s*")
+# Đoạn trích tối thiểu (số từ) để coi là trùng một phần với một bài trong dữ liệu.
+PARTIAL_MATCH_MIN_WORDS = 30
 
 
 def match_key(text: str) -> str:
@@ -73,6 +75,14 @@ class DatasetLookup:
             }
             or decorated_title and title_key(text) == title_key(row["title"])
         )]
+        match_type = "exact"
+        if not matches and len(normalized.split()) >= PARTIAL_MATCH_MIN_WORDS:
+            # Người dùng thường chỉ copy một đoạn bài: đoạn đủ dài và nằm nguyên vẹn
+            # trong một bài của dữ liệu thì vẫn coi là khớp (trùng một phần).
+            needle = f" {normalized} "
+            matches = [row for row in self.samples
+                       if needle in f" {match_key(row['title'] + ' ' + row['text'])} "]
+            match_type = "partial"
         labels = {row["label"] for row in matches}
         scores = (self.matrix @ self.vectorizer.transform([normalized]).T).toarray().ravel()
         ranked = sorted(range(len(scores)), key=lambda index: scores[index], reverse=True)
@@ -91,7 +101,8 @@ class DatasetLookup:
             if len(suggestions) == 3:
                 break
         if len(labels) == 1:
-            return {"method": "match", "label": labels.pop(), "match": matches[0], "suggestions": suggestions, "classifier": None}
+            return {"method": "match", "label": labels.pop(), "match": matches[0], "suggestions": suggestions,
+                    "classifier": None, "match_type": match_type}
         signal = None
         # Lý do mô hình không đưa nhãn, để giao diện giải thích thay vì chỉ ghi "chưa xác định".
         skipped: dict[str, Any] | None = None

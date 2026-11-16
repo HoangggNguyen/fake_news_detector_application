@@ -57,6 +57,28 @@ const evidenceTypeLabels: Record<string, string> = {
 };
 
 /** Vì sao lớp dữ liệu + mô hình chưa đưa ra nhãn, viết cho người dùng. */
+/**
+ * Gợi ý bước tiếp theo khi chưa kết luận, tùy theo người dùng đã gửi văn bản hay đường dẫn
+ * và lý do mô hình chưa đưa nhãn. Trả về null khi gửi thêm cũng không giúp được.
+ */
+function nextStepHint(
+  result: AnalysisResult,
+  inputType: InputMode,
+): string | null {
+  const skipped = result.dataset_result?.classifier_skipped;
+  const minWords = skipped?.min_words ?? 80;
+  if (skipped?.reason === "too_short") {
+    return inputType === "url"
+      ? `Hệ thống chỉ lấy được ${skipped.word_count ?? "ít"} từ từ trang này (có thể trang chặn tải tự động hoặc bài rất ngắn). Bạn có thể copy toàn văn bài rồi dán trực tiếp vào ô bên dưới.`
+      : `Để mô hình đánh giá được cách viết, bạn có thể dán toàn văn bài viết (từ ${minWords} từ) hoặc đường dẫn bài gốc ở ô bên dưới.`;
+  }
+  if (skipped?.reason === "low_confidence") {
+    // Mô hình đã đọc đủ nội dung; gửi lại cùng bài sẽ cho cùng kết quả.
+    return "Mô hình đã đọc toàn bộ nội dung nhưng cách viết không nghiêng rõ về tin thật hay tin giả. Bạn nên đối chiếu thêm với các trang báo chính thống.";
+  }
+  return null;
+}
+
 function unresolvedReason(result: AnalysisResult): string {
   const skipped = result.dataset_result?.classifier_skipped;
   if (skipped?.reason === "too_short")
@@ -325,6 +347,27 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Tăng giá trị này để mở lại kết nối theo dõi tiến trình (nút "Kiểm tra lại").
   const [progressAttempt, setProgressAttempt] = useState(0);
+  // Cuộn khung trò chuyện sau khi giao diện cập nhật:
+  // "bottom" = xuống cuối (vừa gửi tin, mở cuộc trò chuyện);
+  // "latest" = tới đầu câu trả lời mới nhất (kết quả vừa xong, để đọc từ đầu thay vì từ cuối).
+  const [scrollTarget, setScrollTarget] = useState<"bottom" | "latest" | null>(
+    null,
+  );
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  // Bản nháp đang gõ dở của từng cuộc trò chuyện ("" = cuộc trò chuyện mới chưa gửi),
+  // để chuyển sang cuộc khác không mang theo chữ đang gõ, và quay lại thì vẫn còn.
+  const draftsRef = useRef(
+    new Map<string, { content: string; mode: InputMode }>(),
+  );
+
+  function switchDraft(nextId: string) {
+    if (nextId === conversationId) return;
+    if (content.trim()) draftsRef.current.set(conversationId, { content, mode });
+    else draftsRef.current.delete(conversationId);
+    const draft = draftsRef.current.get(nextId);
+    setContent(draft?.content ?? "");
+    if (draft) setMode(draft.mode);
+  }
   const problem = composerProblem(mode, content);
   const canSubmit =
     !busy &&
@@ -339,10 +382,14 @@ export default function App() {
     setHistory(body.conversations ?? []);
   }
 
-  async function loadConversation(id: string) {
+  async function loadConversation(
+    id: string,
+    scroll: "bottom" | "latest" = "bottom",
+  ) {
     const body = await apiRequest<{ analyses?: ConversationAnalysis[] }>(
       `/api/conversations/${id}`,
     );
+    switchDraft(id);
     setConversationId(id);
     setNotice("");
     const analyses = body.analyses ?? [];
@@ -367,7 +414,27 @@ export default function App() {
       setAnalysisId("");
       setView("result");
     }
+    setScrollTarget(active ? "bottom" : scroll);
   }
+
+  useEffect(() => {
+    if (!scrollTarget) return;
+    // Chờ trình duyệt vẽ xong nội dung mới rồi mới cuộn.
+    const frame = window.requestAnimationFrame(() => {
+      const transcript = transcriptRef.current;
+      if (transcript) {
+        const turns = transcript.querySelectorAll(".result-view");
+        const latest = turns[turns.length - 1];
+        if (scrollTarget === "latest" && latest) {
+          latest.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else {
+          transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+        }
+      }
+      setScrollTarget(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollTarget, results, view]);
 
   useEffect(() => {
     void apiRequest<{ user?: User }>("/api/auth/me")
@@ -412,6 +479,9 @@ export default function App() {
       setResults([]);
       setHistory([]);
       setConversationId("");
+      // Không để lại bản nháp cho tài khoản đăng nhập sau trên cùng trình duyệt.
+      draftsRef.current.clear();
+      setContent("");
       setView("compose");
     } catch (cause) {
       setError(errorMessage(cause, "Không thể đăng xuất."));
@@ -464,7 +534,7 @@ export default function App() {
     };
 
     const openResult = () => {
-      void loadConversation(conversationId)
+      void loadConversation(conversationId, "latest")
         .then(loadHistory)
         .catch((cause: unknown) =>
           setError(errorMessage(cause, "Không tải được kết quả.")),
@@ -588,7 +658,7 @@ export default function App() {
       setContent("");
       setAnalysisId(body.id);
       if (body.status === "completed") {
-        await loadConversation(activeConversation);
+        await loadConversation(activeConversation, "latest");
       } else {
         setProgress({
           stage: "pending",
@@ -596,6 +666,8 @@ export default function App() {
           progress: 2,
         });
         setView("progress");
+        // Dù người dùng đang cuộn ở phía trên, vẫn đưa họ xuống tin vừa gửi và thanh tiến trình.
+        setScrollTarget("bottom");
       }
     } catch (cause) {
       setError(errorMessage(cause, "Không tạo được yêu cầu phân tích."));
@@ -720,9 +792,9 @@ export default function App() {
           type="button"
           onClick={() => {
             setView("compose");
+            switchDraft("");
             setConversationId("");
             setResults([]);
-            setContent("");
             setError("");
             setNotice("");
             setAnalysisFailed(false);
@@ -822,7 +894,7 @@ export default function App() {
         )}
 
         {(view === "result" || view === "progress") && (
-          <div className="chat-transcript">
+          <div className="chat-transcript" ref={transcriptRef}>
             {results.map((result) => (
               <section
                 key={result.id}
@@ -848,7 +920,9 @@ export default function App() {
                           <>
                             <p className="result-summary">
                               {result.dataset_result.method === "match"
-                                ? `Đã tìm thấy tin trùng khớp trong dữ liệu tham khảo, nơi tin này được ghi nhận là ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"}.`
+                                ? result.dataset_result.match_type === "partial"
+                                  ? `Nội dung bạn gửi là một đoạn của tin có trong dữ liệu tham khảo, nơi tin này được ghi nhận là ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"}.`
+                                  : `Đã tìm thấy tin trùng khớp trong dữ liệu tham khảo, nơi tin này được ghi nhận là ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"}.`
                                 : result.dataset_result.method === "prediction"
                                   ? `Cách viết của nội dung này giống các ${result.dataset_result.label === "real" ? "tin thật" : "tin giả"} mà mô hình đã học. Đây là dự đoán, chưa phải kết luận đã kiểm chứng.`
                                   : result.dataset_result.overall_basis ===
@@ -859,17 +933,12 @@ export default function App() {
 
                             {/* Câu hỏi gợi ý của Groq không còn hiển thị: hệ thống không dùng câu trả lời
                                 của người dùng (mỗi lần gửi được phân tích độc lập), nên thay bằng hướng dẫn cố định. */}
-                            {result.dataset_result.method === "unresolved" && (
-                              <p className="result-hint">
-                                Để kiểm tra kỹ hơn, bạn có thể dán toàn văn bài
-                                viết (từ{" "}
-                                {result.dataset_result.classifier_skipped
-                                  ?.min_words ?? 80}{" "}
-                                từ) hoặc đường dẫn bài gốc ở ô bên dưới. Mỗi
-                                lần gửi được phân tích riêng, không ghép với
-                                tin trước.
-                              </p>
-                            )}
+                            {result.dataset_result.method === "unresolved" &&
+                              nextStepHint(result, result.input_type) && (
+                                <p className="result-hint">
+                                  {nextStepHint(result, result.input_type)}
+                                </p>
+                              )}
 
                             {result.dataset_result.match && (
                               <section
