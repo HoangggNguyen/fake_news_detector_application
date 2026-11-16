@@ -14,6 +14,8 @@ export const datasetResultSchema = z.object({
   match: sampleSchema.nullable(),
   suggestions: z.array(sampleSchema).max(3),
   classifier: classifierSignalSchema.nullable(),
+  /** exact = trùng toàn bộ; partial = nội dung gửi là một đoạn nằm nguyên vẹn trong bài của dữ liệu. */
+  match_type: z.enum(['exact', 'partial']).optional(),
   classifier_skipped: z.object({
     reason: z.enum(['too_short', 'low_confidence', 'conflicting_matches', 'model_unavailable']),
     min_words: z.number().int().optional(),

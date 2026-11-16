@@ -23,6 +23,12 @@ export function composerProblem(mode: 'text' | 'url', content: string): string |
     return null
   }
 
+  // Chỉ dán một đường dẫn trong chế độ "Văn bản": hệ thống sẽ phân tích chính dòng link
+  // thay vì đọc bài báo, nên báo để người dùng chọn đúng chế độ.
+  if (/^https?:\/\/\S+$/i.test(value)) {
+    return 'Đây là đường dẫn. Hãy chọn "Đường dẫn" ở phía trên để hệ thống tải và đọc bài viết.'
+  }
+
   if (value.length < MIN_CONTENT_LENGTH) {
     return `Cần ít nhất ${MIN_CONTENT_LENGTH} ký tự để phân tích (còn thiếu ${MIN_CONTENT_LENGTH - value.length}).`
   }

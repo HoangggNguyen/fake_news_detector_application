@@ -146,3 +146,19 @@ def test_unresolved_result_explains_why_the_classifier_gave_no_label(tmp_path, m
     unsure = lookup.classify("Nội dung khác hoàn toàn", {"min_training_words": 1})
     assert unsure["classifier_skipped"] == {"reason": "low_confidence"}
     assert lookup.classify("Nội dung khác hoàn toàn", None)["classifier_skipped"] == {"reason": "model_unavailable"}
+
+
+def test_long_excerpt_of_a_sample_counts_as_partial_match(tmp_path):
+    path = tmp_path / "train.csv"
+    body = " ".join(f"câu số {i} nói về su hào và sức khỏe." for i in range(20))
+    write_samples(path, [
+        {"id": "1", "title": "Thần dược mùa đông", "text": body, "domain": "A", "label": "1"},
+    ])
+    lookup = DatasetLookup([path])
+    excerpt = " ".join(body.split()[:40])
+    result = lookup.classify(excerpt, None)
+    assert result["method"] == "match" and result["label"] == "fake"
+    assert result["match_type"] == "partial"
+    assert lookup.classify(body, None)["match_type"] == "exact"
+    # Đoạn ngắn hơn 30 từ không được coi là trùng một phần.
+    assert lookup.classify(" ".join(body.split()[:20]), None)["method"] == "unresolved"

@@ -76,5 +76,20 @@ test('LLM calls retry on overload but not on client errors', async () => {
   assert.equal(calls, 1)
   calls = 0
   await assert.rejects(withRetry(async () => { calls++; throw new HttpStatusError(429, 'rate limited') }, noWait), /rate limited/)
-  assert.equal(calls, 3)
+  assert.equal(calls, 4)
+  calls = 0
+  const reset = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) })
+  assert.equal(await withRetry(async () => { calls++; if (calls < 2) throw reset; return 'ok' }, noWait), 'ok')
+  assert.equal(calls, 2)
+})
+
+test('LLM falls back to the other configured provider', async () => {
+  const { fallbackProvider, describeError } = await import('./analyzer.js')
+  assert.equal(fallbackProvider('gemini', { GROQ_API_KEY: 'x' }), 'groq')
+  assert.equal(fallbackProvider('groq', { GEMINI_API_KEY: 'x' }), 'gemini')
+  assert.equal(fallbackProvider('gemini', {}), null)
+  assert.equal(fallbackProvider('gemini', { GROQ_API_KEY: 'x', LLM_FALLBACK_PROVIDER: 'none' }), null)
+  assert.equal(fallbackProvider('gemini', { LLM_FALLBACK_PROVIDER: 'ollama' }), 'ollama')
+  const reset = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) })
+  assert.equal(describeError(reset), 'fetch failed: ECONNRESET read ECONNRESET')
 })
